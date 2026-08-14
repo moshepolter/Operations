@@ -5,7 +5,7 @@ import {
   CheckCircle2, Loader2, Building2, Users, User, Camera, Pencil
 } from "lucide-react";
 import { doc, collection, onSnapshot, setDoc, deleteDoc, runTransaction } from "firebase/firestore";
-import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { db, auth } from "./firebase";
 
 const C = {
@@ -67,6 +67,60 @@ function useAnonAuth() {
     return unsub;
   }, []);
   return ready;
+}
+
+// For your dashboard only: checks for a REAL signed-in user (email/password),
+// not an anonymous one. Doesn't sign anyone in automatically — if nobody's
+// logged in, the app shows the login screen instead.
+function useRealAuth() {
+  const [user, setUser] = useState(null);
+  const [checked, setChecked] = useState(false);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u && !u.isAnonymous ? u : null);
+      setChecked(true);
+    });
+    return unsub;
+  }, []);
+  return { user, checked };
+}
+
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (err) {
+      setError("Incorrect email or password.");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-5" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
+      <form onSubmit={submit} className="w-full max-w-sm p-6 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+        <div className="text-xs uppercase tracking-widest font-semibold mb-1" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Property Ops</div>
+        <h1 className="text-xl font-bold mb-4" style={{ color: C.ink }}>Sign in</h1>
+        <div className="flex flex-col gap-3">
+          <Field label="Email">
+            <input type="email" required autoFocus className={inputCls} style={inputStyle()} value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          <Field label="Password">
+            <input type="password" required className={inputCls} style={inputStyle()} value={password} onChange={(e) => setPassword(e.target.value)} />
+          </Field>
+          {error && <div className="text-sm" style={{ color: C.red }}>{error}</div>}
+          <Btn type="submit" disabled={busy}>{busy ? "Signing in..." : "Sign in"}</Btn>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 // Keeps one array (invoices, buildings, etc.) live-synced with a single
@@ -183,7 +237,7 @@ const inputCls = "px-3 py-2 rounded-md border bg-white text-sm focus:outline-non
 const selectCls = inputCls;
 function inputStyle() { return { borderColor: C.hair, color: C.ink }; }
 
-function Btn({ children, onClick, tone = "slate", size = "md", icon: Icon, disabled }) {
+function Btn({ children, onClick, tone = "slate", size = "md", icon: Icon, disabled, type = "button" }) {
   const tones = {
     slate: { bg: C.slate, fg: "#fff" }, green: { bg: C.green, fg: "#fff" },
     red: { bg: C.red, fg: "#fff" }, amber: { bg: C.amber, fg: "#fff" },
@@ -192,7 +246,7 @@ function Btn({ children, onClick, tone = "slate", size = "md", icon: Icon, disab
   const t = tones[tone];
   const pad = size === "sm" ? "px-2.5 py-1 text-xs" : "px-3.5 py-2 text-sm";
   return (
-    <button type="button" onClick={onClick} disabled={disabled}
+    <button type={type} onClick={onClick} disabled={disabled}
       className={`inline-flex items-center gap-1.5 rounded-md font-medium transition-opacity hover:opacity-90 disabled:opacity-40 ${pad}`}
       style={{ backgroundColor: t.bg, color: t.fg, border: tone === "ghost" ? `1px solid ${C.hair}` : "none" }}>
       {Icon && <Icon size={size === "sm" ? 13 : 15} />}
@@ -1094,7 +1148,8 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
 
 function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalone }) {
   const pending = invoices.filter((i) => i.status === "pending");
-  const decided = invoices.filter((i) => i.status !== "pending");
+  const reviewed = invoices.filter((i) => i.status === "approved" || i.status === "declined");
+  const paid = invoices.filter((i) => i.status === "paid");
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
       <header className="px-5 sm:px-8 pt-6 pb-4 border-b flex items-center justify-between" style={{ borderColor: C.hair }}>
@@ -1102,41 +1157,49 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
         {!standalone && <button onClick={onExit} className="text-xs underline" style={{ color: C.muted }}>Exit</button>}
       </header>
       <main className="px-5 sm:px-8 py-5 max-w-lg mx-auto flex flex-col gap-4">
-        {pending.length === 0 && decided.length === 0 && <Empty text="No invoices yet." />}
-        {pending.length === 0 && decided.length > 0 && (
+        {pending.length === 0 && reviewed.length === 0 && paid.length === 0 && <Empty text="No invoices yet." />}
+        {pending.length === 0 && (reviewed.length > 0 || paid.length > 0) && (
           <div className="text-center py-6" style={{ color: C.muted }}>Nothing waiting on you right now.</div>
         )}
         {pending.map((inv) => (
           <BossInvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings}
             onUpdate={onUpdate} />
         ))}
-        {decided.length > 0 && (
-          <div className="mt-4">
-            <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Already reviewed</div>
-            <div className="flex flex-col gap-2">
-              {decided.map((inv) => {
-                const contractor = lookupContractor(contractors, inv.contractorId);
-                const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> :
-                  inv.status === "paid" ? <Stamp tone="green">Paid</Stamp> : <Stamp tone="red">Declined</Stamp>;
-                return (
-                  <div key={inv.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-                    <div className="text-sm" style={{ color: C.ink }}>{contractor?.name || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
-                    {stamp}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+
+        <CollapsibleSection label="Already reviewed" count={reviewed.length}>
+          {reviewed.map((inv) => {
+            const contractor = lookupContractor(contractors, inv.contractorId);
+            const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> : <Stamp tone="red">Declined</Stamp>;
+            return (
+              <div key={inv.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+                <div className="text-sm" style={{ color: C.ink }}>{contractor?.name || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
+                {stamp}
+              </div>
+            );
+          })}
+        </CollapsibleSection>
+
+        <CollapsibleSection label="Paid invoices" count={paid.length}>
+          {paid.map((inv) => {
+            const contractor = lookupContractor(contractors, inv.contractorId);
+            return (
+              <div key={inv.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+                <div className="text-sm" style={{ color: C.ink }}>{contractor?.name || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
+                <Stamp tone="green">Paid</Stamp>
+              </div>
+            );
+          })}
+        </CollapsibleSection>
       </main>
     </div>
   );
 }
 /* ---------------- ROOT ---------------- */
 
-function MainApp() {
+function Dashboard({ onSignOut }) {
   useFonts();
-  const authReady = useAnonAuth();
+  useEffect(() => { document.title = "Moshe's Ops Board"; }, []);
+  const authReady = true; // already confirmed as a real, logged-in user by MainApp below
   const [tab, setTab] = useState("invoices");
   const [showForm, setShowForm] = useState(false);
   const [bossMode, setBossMode] = useState(false);
@@ -1191,9 +1254,14 @@ function MainApp() {
             <h1 className="text-2xl font-bold mt-0.5">Moshe's Ops Board</h1>
           </div>
           <div className="flex flex-col items-end gap-1.5">
-            <button onClick={() => setBossMode(true)} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.slate }}>
-              Preview Boss View
-            </button>
+            <div className="flex gap-1.5">
+              <button onClick={() => setBossMode(true)} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.slate }}>
+                Preview Boss View
+              </button>
+              <button onClick={onSignOut} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.muted }}>
+                Sign out
+              </button>
+            </div>
             <div className="text-xs hidden sm:block" style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtDate(todayISO())}</div>
           </div>
         </div>
@@ -1336,6 +1404,18 @@ function Empty({ text }) {
   return <div className="text-center py-10 rounded-lg border border-dashed" style={{ borderColor: C.hair, color: C.muted }}>{text}</div>;
 }
 
+// Gate in front of the real dashboard — requires an actual signed-in
+// (non-anonymous) account. If nobody's logged in, shows the login screen
+// instead of the app.
+function MainApp() {
+  const { user, checked } = useRealAuth();
+  if (!checked) {
+    return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
+  }
+  if (!user) return <LoginScreen />;
+  return <Dashboard onSignOut={() => signOut(auth)} />;
+}
+
 /* ---------------- BOSS-ONLY LINK ---------------- */
 // Visiting /boss loads ONLY this component — it never fetches or renders
 // violations, work orders, or the directory, and there is no way to
@@ -1343,6 +1423,7 @@ function Empty({ text }) {
 
 function BossPage() {
   useFonts();
+  useEffect(() => { document.title = "Invoice Approvals"; }, []);
   const authReady = useAnonAuth();
   const [invoices, saveInvoice, , invReady] = useCollectionSynced("invoices", authReady);
   const [contractors, , conReady] = useSynced("contractors", authReady, SEED_CONTRACTORS);
