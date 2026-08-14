@@ -308,6 +308,28 @@ function PhotoAttach({ photos, onAdd, onRemove }) {
   );
 }
 
+function NegotiatedPriceBox({ amount, onChange }) {
+  const [val, setVal] = useState("");
+
+  const submit = () => {
+    const next = Number(val);
+    if (!next || next === Number(amount)) return;
+    onChange(next, { field: "amount", from: amount, to: next, by: "boss", date: todayISO() });
+    setVal("");
+  };
+
+  return (
+    <div className="mt-2 mb-3">
+      <label className="text-xs font-medium uppercase tracking-wide" style={{ color: C.muted }}>Negotiated / new price</label>
+      <div className="flex gap-2 mt-1">
+        <input type="number" placeholder={`Current: $${Number(amount).toLocaleString()}`} className={inputCls} style={inputStyle()}
+          value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+        <Btn size="sm" onClick={submit}>Save</Btn>
+      </div>
+    </div>
+  );
+}
+
 function AmountEditor({ amount, onChange, editorRole, big, linkText }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(amount);
@@ -432,6 +454,53 @@ function lookupApartment(buildings, buildingId, apartmentId) {
   return b ? b.apartments.find((a) => a.id === apartmentId) : null;
 }
 
+// Builds one lowercase blob of everything searchable about an invoice or
+// work order — vendor/contractor, tenant, building, apartment, phone
+// numbers, description — so a single search box can match any of it.
+function invoiceSearchText(inv, contractors, buildings) {
+  const contractor = lookupContractor(contractors, inv.contractorId);
+  const apartment = lookupApartment(buildings, inv.buildingId, inv.apartmentId);
+  const building = lookupBuilding(buildings, inv.buildingId);
+  return [
+    inv.number, contractor?.name, contractor?.phone, building?.name,
+    apartment?.number, apartment?.tenantName, apartment?.tenantPhone, apartment?.tenantEmail,
+    inv.description, inv.amount,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+function workOrderSearchText(w, contractors, buildings) {
+  const contractor = lookupContractor(contractors, w.contractorId);
+  const apartment = lookupApartment(buildings, w.buildingId, w.apartmentId);
+  const building = lookupBuilding(buildings, w.buildingId);
+  return [
+    w.number, apartment?.tenantName, apartment?.tenantPhone, apartment?.tenantEmail,
+    contractor?.name, contractor?.phone, building?.name, apartment?.number, w.issue,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function SearchBar({ value, onChange, placeholder }) {
+  return (
+    <input className={inputCls} style={inputStyle()} value={value} onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder} />
+  );
+}
+
+function CollapsibleSection({ label, count, children, forceOpen }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
+  if (count === 0) return null;
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between gap-2 p-3 rounded-lg border text-sm font-medium"
+        style={{ borderColor: C.hair, backgroundColor: C.card, color: C.ink }}>
+        <span>{label} ({count})</span>
+        {open ? <ChevronUp size={16} color={C.muted} /> : <ChevronDown size={16} color={C.muted} />}
+      </button>
+      {open && <div className="flex flex-col gap-3 mt-3">{children}</div>}
+    </div>
+  );
+}
+
 /* ---------------- INVOICES ---------------- */
 
 function MessageThread({ messages, onSend, sendAs, placeholder }) {
@@ -548,6 +617,7 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
   const building = lookupBuilding(buildings, inv.buildingId);
   const messages = inv.messages || [];
   const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> :
+    inv.status === "paid" ? <Stamp tone="green">Paid</Stamp> :
     inv.status === "declined" ? <Stamp tone="red">Declined</Stamp> : <Stamp tone="slate">Pending</Stamp>;
 
   const linkedWorkOrder = inv.linkedType === "workorder" ? workorders.find((w) => w.id === inv.linkedId) : null;
@@ -585,8 +655,10 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
       {open && (
         <div className="px-4 pb-4">
           <div className="flex flex-wrap gap-2">
-            <Btn size="sm" tone="green" icon={Check} onClick={() => onUpdate({ ...inv, status: "approved" })}>Approve</Btn>
-            <Btn size="sm" tone="red" icon={X} onClick={() => onUpdate({ ...inv, status: "declined" })}>Decline</Btn>
+            {inv.status !== "approved" && inv.status !== "paid" && <Btn size="sm" tone="green" icon={Check} onClick={() => onUpdate({ ...inv, status: "approved" })}>Approve</Btn>}
+            {inv.status !== "declined" && inv.status !== "paid" && <Btn size="sm" tone="red" icon={X} onClick={() => onUpdate({ ...inv, status: "declined" })}>Decline</Btn>}
+            {inv.status === "approved" && <Btn size="sm" tone="slate" icon={CheckCircle2} onClick={() => onUpdate({ ...inv, status: "paid" })}>Mark paid</Btn>}
+            {inv.status === "paid" && <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...inv, status: "approved" })}>Unmark paid</Btn>}
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(inv.id)}>Remove</Btn>
           </div>
           <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
@@ -972,9 +1044,10 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
         </div>
         {stamp}
       </div>
-      <AmountEditor amount={inv.amount} editorRole="boss" big linkText="Enter a different amount"
+      <div className="text-2xl font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>${Number(inv.amount).toLocaleString()}</div>
+      <NegotiatedPriceBox amount={inv.amount}
         onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
-      <div className="text-base mb-4 mt-2" style={{ color: C.ink }}>{inv.description}</div>
+      <div className="text-base mb-4" style={{ color: C.ink }}>{inv.description}</div>
 
       <div className="grid grid-cols-3 gap-2">
         <button onClick={() => onUpdate({ ...inv, status: "approved" })}
@@ -1043,7 +1116,8 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
             <div className="flex flex-col gap-2">
               {decided.map((inv) => {
                 const contractor = lookupContractor(contractors, inv.contractorId);
-                const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> : <Stamp tone="red">Declined</Stamp>;
+                const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> :
+                  inv.status === "paid" ? <Stamp tone="green">Paid</Stamp> : <Stamp tone="red">Declined</Stamp>;
                 return (
                   <div key={inv.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
                     <div className="text-sm" style={{ color: C.ink }}>{contractor?.name || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
@@ -1067,6 +1141,9 @@ function MainApp() {
   const [showForm, setShowForm] = useState(false);
   const [bossMode, setBossMode] = useState(false);
   const [jumpToId, setJumpToId] = useState("");
+  const [jumpToPaid, setJumpToPaid] = useState(false);
+  const [invoiceSearch, setInvoiceSearch] = useState("");
+  const [workOrderSearch, setWorkOrderSearch] = useState("");
   const invoiceCardRefs = useRef({});
 
   const [invoices, saveInvoice, deleteInvoice, invReady] = useCollectionSynced("invoices", authReady);
@@ -1082,6 +1159,14 @@ function MainApp() {
   const pendingInvoices = invoices.filter((i) => i.status === "pending").length;
   const dueViolations = violations.filter((v) => v.status !== "resolved" && daysBetween(todayISO(), v.cureDate) <= 7);
   const openWorkOrders = workorders.filter((w) => w.status !== "resolved").length;
+
+  const invQuery = invoiceSearch.trim().toLowerCase();
+  const activeInvoices = invoices.filter((i) => i.status !== "paid" && (!invQuery || invoiceSearchText(i, contractors, buildings).includes(invQuery)));
+  const paidInvoices = invoices.filter((i) => i.status === "paid" && (!invQuery || invoiceSearchText(i, contractors, buildings).includes(invQuery)));
+
+  const woQuery = workOrderSearch.trim().toLowerCase();
+  const activeWorkOrders = workorders.filter((w) => w.status !== "resolved" && (!woQuery || workOrderSearchText(w, contractors, buildings).includes(woQuery)));
+  const completedWorkOrders = workorders.filter((w) => w.status === "resolved" && (!woQuery || workOrderSearchText(w, contractors, buildings).includes(woQuery)));
 
   const tabs = [
     { id: "invoices", label: "Invoices", icon: FileText, count: pendingInvoices },
@@ -1173,29 +1258,45 @@ function MainApp() {
           )}
 
           {tab === "invoices" && invoices.length > 0 && (
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-medium uppercase tracking-wide shrink-0" style={{ color: C.muted }}>Jump to invoice</label>
-              <select className={selectCls} style={inputStyle()} value={jumpToId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setJumpToId(id);
-                  if (id) invoiceCardRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "center" });
-                }}>
-                <option value="">Select invoice #...</option>
-                {[...invoices].sort((a, b) => (b.number ?? 0) - (a.number ?? 0)).map((inv) => {
-                  const contractor = lookupContractor(contractors, inv.contractorId);
-                  return <option key={inv.id} value={inv.id}>#{inv.number ?? "—"} — {contractor?.name || "Unassigned"} — ${Number(inv.amount).toLocaleString()}</option>;
-                })}
-              </select>
-            </div>
+            <>
+              <SearchBar value={invoiceSearch} onChange={setInvoiceSearch} placeholder="Search by vendor, building, apartment, tenant, phone, description..." />
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium uppercase tracking-wide shrink-0" style={{ color: C.muted }}>Jump to invoice</label>
+                <select className={selectCls} style={inputStyle()} value={jumpToId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setJumpToId(id);
+                    const target = invoices.find((i) => i.id === id);
+                    if (target?.status === "paid") setJumpToPaid(true);
+                    if (id) setTimeout(() => invoiceCardRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+                  }}>
+                  <option value="">Select invoice #...</option>
+                  {[...invoices].sort((a, b) => (b.number ?? 0) - (a.number ?? 0)).map((inv) => {
+                    const contractor = lookupContractor(contractors, inv.contractorId);
+                    return <option key={inv.id} value={inv.id}>#{inv.number ?? "—"} — {contractor?.name || "Unassigned"} — ${Number(inv.amount).toLocaleString()}</option>;
+                  })}
+                </select>
+              </div>
+            </>
           )}
 
-          {tab === "invoices" && (invoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
-            invoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
-              cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
-              forceOpenId={jumpToId}
-              onUpdate={saveInvoice}
-              onDelete={deleteInvoice} />))}
+          {tab === "invoices" && (activeInvoices.length === 0 && paidInvoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
+            <>
+              {activeInvoices.length === 0 && invoices.length > 0 && <Empty text="No invoices match your search." />}
+              {activeInvoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
+                cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
+                forceOpenId={jumpToId}
+                onUpdate={saveInvoice}
+                onDelete={deleteInvoice} />)}
+              <CollapsibleSection label="Paid invoices" count={paidInvoices.length} forceOpen={jumpToPaid}>
+                {paidInvoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
+                  cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
+                  forceOpenId={jumpToId}
+                  onUpdate={saveInvoice}
+                  onDelete={deleteInvoice} />)}
+              </CollapsibleSection>
+            </>
+          )}
 
           {tab === "violations" && (violations.length === 0 ? <Empty text="No violations tracked yet." /> :
             [...violations].sort((a, b) => (a.status === "resolved") - (b.status === "resolved") || a.cureDate.localeCompare(b.cureDate)).map((v) => (
@@ -1204,10 +1305,23 @@ function MainApp() {
                 onDelete={(id) => violationsPersist(violations.filter((x) => x.id !== id))} />
             )))}
 
-          {tab === "workorders" && (workorders.length === 0 ? <Empty text="No work orders yet." /> :
-            workorders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings}
-              onUpdate={saveWorkOrder}
-              onDelete={deleteWorkOrder} />))}
+          {tab === "workorders" && workorders.length > 0 && (
+            <SearchBar value={workOrderSearch} onChange={setWorkOrderSearch} placeholder="Search by tenant, building, apartment, phone, vendor, issue..." />
+          )}
+
+          {tab === "workorders" && (activeWorkOrders.length === 0 && completedWorkOrders.length === 0 ? <Empty text="No work orders yet." /> :
+            <>
+              {activeWorkOrders.length === 0 && workorders.length > 0 && <Empty text="No work orders match your search." />}
+              {activeWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings}
+                onUpdate={saveWorkOrder}
+                onDelete={deleteWorkOrder} />)}
+              <CollapsibleSection label="Completed work orders" count={completedWorkOrders.length}>
+                {completedWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings}
+                  onUpdate={saveWorkOrder}
+                  onDelete={deleteWorkOrder} />)}
+              </CollapsibleSection>
+            </>
+          )}
 
           {tab === "directory" && (
             <DirectoryTab buildings={buildings} contractors={contractors} buildingsPersist={buildingsPersist} contractorsPersist={contractorsPersist} />
