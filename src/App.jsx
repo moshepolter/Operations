@@ -672,68 +672,88 @@ function MessageThread({ messages, onSend, sendAs, placeholder }) {
 function LinkedItemPicker({ workorders, violations, buildings, invoices, contractors, linkedType, linkedId, linkedTaskId, onChange }) {
   const [showLinked, setShowLinked] = useState(false);
 
-  // Build one flat list of everything a new invoice could attach to: either
-  // a whole work order (for simple single-vendor jobs, once resolved) or a
-  // single vendor's task within a work order (as soon as THAT task is
-  // marked complete — doesn't require the whole job to be finished).
-  const items = [];
-  workorders.forEach((w) => {
+  const isPaid = (workOrderId, taskId) => (invoices || []).some((i) => i.linkedType === "workorder" && i.status === "paid" && i.linkedId === workOrderId && (i.linkedTaskId || "") === (taskId || ""));
+
+  // Step 1: which work order. Only lists work orders that have at least one
+  // billable thing on them (not marked "not billing") that's either
+  // resolved (simple job) or has at least one completed task (split job).
+  const eligibleWorkOrders = workorders.filter((w) => {
     const tasks = w.tasks || [];
-    if (tasks.length === 0) {
-      if (w.status === "resolved") items.push({ key: `${w.id}:`, workOrderId: w.id, taskId: "", w, task: null });
-    } else {
-      tasks.forEach((t) => { if (t.status === "completed") items.push({ key: `${w.id}:${t.id}`, workOrderId: w.id, taskId: t.id, w, task: t }); });
-    }
+    if (tasks.length === 0) return w.status === "resolved" && !w.notBilling;
+    return tasks.some((t) => t.status === "completed" && !t.notBilling);
   });
-  const isPaid = (item) => (invoices || []).some((i) => i.linkedType === "workorder" && i.status === "paid" && i.linkedId === item.workOrderId && (i.linkedTaskId || "") === item.taskId);
-  const openItems = items.filter((i) => !isPaid(i));
-  const paidItems = items.filter(isPaid);
 
-  const label = (item) => {
-    const b = lookupBuilding(buildings, item.w.buildingId);
-    const c = item.task ? lookupContractor(contractors, item.task.contractorId) : lookupContractor(contractors, item.w.contractorId);
-    const desc = item.task ? item.task.description : item.w.issue;
-    return `#${item.w.number ?? "—"} — ${b?.name || "No building"} — ${(desc || "").slice(0, 30)}${c ? ` (${c.name})` : ""}`;
-  };
+  const selectedWorkOrder = linkedType === "workorder" ? workorders.find((w) => w.id === linkedId) : null;
+  const selectedTasks = selectedWorkOrder ? (selectedWorkOrder.tasks || []).filter((t) => t.status === "completed" && !t.notBilling) : [];
+  const openTasks = selectedTasks.filter((t) => !isPaid(selectedWorkOrder?.id, t.id));
+  const paidTasks = selectedTasks.filter((t) => isPaid(selectedWorkOrder?.id, t.id));
 
-  const value = !linkedType || linkedType === "none" ? "none" : `${linkedType}:${linkedId}:${linkedTaskId || ""}`;
+  const kind = linkedType === "violation" ? "violation" : linkedType === "workorder" ? "workorder" : "none";
+
   return (
-    <Field label="Link to a work order or HPD violation (optional)">
-      <select className={selectCls} style={inputStyle()} value={value}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (v === "none") { onChange("none", "", ""); return; }
-          const parts = v.split(":");
-          onChange(parts[0], parts[1], parts[2] || "");
-        }}>
-        <option value="none">Not linked</option>
-        <optgroup label="Completed work / vendor tasks">
-          {openItems.length === 0 && <option value="none-wo" disabled>Nothing completed yet to bill against</option>}
-          {openItems.map((item) => <option key={item.key} value={`workorder:${item.workOrderId}:${item.taskId}`}>{label(item)}</option>)}
-        </optgroup>
-        {showLinked && paidItems.length > 0 && (
-          <optgroup label="Already has a paid invoice — link another vendor">
-            {paidItems.map((item) => <option key={item.key} value={`workorder:${item.workOrderId}:${item.taskId}`}>{label(item)} — paid already</option>)}
-          </optgroup>
-        )}
-        <optgroup label="HPD violations">
-          {violations.length === 0 && <option value="none-v" disabled>No violations yet</option>}
-          {violations.map((v) => {
-            const b = lookupBuilding(buildings, v.buildingId);
-            return <option key={v.id} value={`violation:${v.id}:`}>#{v.violationNumber || "—"} — {b?.name || "No building"} — {(v.description || "").slice(0, 40)}</option>;
-          })}
-        </optgroup>
-      </select>
-      {items.length === 0 && workorders.length > 0 && (
-        <div className="text-xs mt-1" style={{ color: C.muted }}>Nothing to link yet — mark a work order (or one of its tasks) complete first.</div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <Field label="Link to">
+        <select className={selectCls} style={inputStyle()} value={kind}
+          onChange={(e) => { setShowLinked(false); onChange(e.target.value === "none" ? "none" : e.target.value, "", ""); }}>
+          <option value="none">Not linked</option>
+          <option value="workorder">A work order</option>
+          <option value="violation">An HPD violation</option>
+        </select>
+      </Field>
+
+      {kind === "workorder" && (
+        <Field label="Which work order">
+          <select className={selectCls} style={inputStyle()} value={linkedId || ""}
+            onChange={(e) => { setShowLinked(false); onChange("workorder", e.target.value, ""); }}>
+            <option value="">Select work order...</option>
+            {eligibleWorkOrders.length === 0 && <option value="" disabled>No completed, billable work orders yet</option>}
+            {eligibleWorkOrders.map((w) => {
+              const b = lookupBuilding(buildings, w.buildingId);
+              return <option key={w.id} value={w.id}>#{w.number ?? "—"} — {b?.name || "No building"} — {(w.issue || "").slice(0, 30)}</option>;
+            })}
+          </select>
+        </Field>
       )}
-      {paidItems.length > 0 && (
-        <label className="flex items-center gap-1.5 text-xs mt-1.5" style={{ color: C.muted }}>
-          <input type="checkbox" checked={showLinked} onChange={(e) => setShowLinked(e.target.checked)} />
-          Multiple vendors on one job — show work that already has a paid invoice ({paidItems.length})
-        </label>
+
+      {kind === "workorder" && selectedWorkOrder && selectedTasks.length > 0 && (
+        <div className="sm:col-span-2">
+          <Field label="Which vendor's part of the job">
+            <select className={selectCls} style={inputStyle()} value={linkedTaskId || ""}
+              onChange={(e) => onChange("workorder", linkedId, e.target.value)}>
+              <option value="">Select vendor's task...</option>
+              {openTasks.map((t) => {
+                const c = lookupContractor(contractors, t.contractorId);
+                return <option key={t.id} value={t.id}>{t.description}{c ? ` — ${c.name}` : " — unassigned vendor"}</option>;
+              })}
+              {showLinked && paidTasks.map((t) => {
+                const c = lookupContractor(contractors, t.contractorId);
+                return <option key={t.id} value={t.id}>{t.description}{c ? ` — ${c.name}` : " — unassigned vendor"} — paid already</option>;
+              })}
+            </select>
+          </Field>
+          {paidTasks.length > 0 && (
+            <label className="flex items-center gap-1.5 text-xs mt-1.5" style={{ color: C.muted }}>
+              <input type="checkbox" checked={showLinked} onChange={(e) => setShowLinked(e.target.checked)} />
+              Multiple vendors on this job — show tasks that already have a paid invoice ({paidTasks.length})
+            </label>
+          )}
+        </div>
       )}
-    </Field>
+
+      {kind === "violation" && (
+        <Field label="Which violation">
+          <select className={selectCls} style={inputStyle()} value={linkedId || ""}
+            onChange={(e) => onChange("violation", e.target.value, "")}>
+            <option value="">Select violation...</option>
+            {violations.length === 0 && <option value="" disabled>No violations yet</option>}
+            {violations.map((v) => {
+              const b = lookupBuilding(buildings, v.buildingId);
+              return <option key={v.id} value={v.id}>#{v.violationNumber || "—"} — {b?.name || "No building"} — {(v.description || "").slice(0, 40)}</option>;
+            })}
+          </select>
+        </Field>
+      )}
+    </div>
   );
 }
 
@@ -1002,14 +1022,20 @@ function NotifyPanel({ kind, buildingName, aptNumber, description, cureDate, ten
   );
 }
 
-function TaskManager({ tasks, contractors, onChange }) {
+function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, onChange }) {
   const list = tasks || [];
   const [desc, setDesc] = useState("");
   const [contractorId, setContractorId] = useState("");
 
   const addTask = () => {
     if (!desc.trim()) return;
-    onChange([...list, { id: uid(), description: desc.trim(), contractorId, status: "open" }]);
+    const parts = desc.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      // Comma-separated: create one task per item, unassigned — assign a vendor to each below.
+      onChange([...list, ...parts.map((p) => ({ id: uid(), description: p, contractorId: "", status: "open", notBilling: false }))]);
+    } else {
+      onChange([...list, { id: uid(), description: parts[0], contractorId, status: "open", notBilling: false }]);
+    }
     setDesc(""); setContractorId("");
   };
   const updateTask = (id, patch) => onChange(list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -1033,30 +1059,41 @@ function TaskManager({ tasks, contractors, onChange }) {
         {list.map((t) => {
           const c = lookupContractor(contractors, t.contractorId);
           return (
-            <div key={t.id} className="flex items-center justify-between gap-2 p-2 rounded" style={{ backgroundColor: C.paperDark }}>
-              <div className="text-sm min-w-0">
-                <div style={{ color: C.ink }} className="truncate">{t.description}</div>
-                <div style={{ color: C.muted }} className="text-xs">{c?.name || "Unassigned"}</div>
+            <div key={t.id} className="p-2 rounded" style={{ backgroundColor: C.paperDark }}>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-sm min-w-0 flex-1">
+                  <div style={{ color: C.ink }} className="truncate">{t.description}</div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                  {t.notBilling && <Stamp tone="slate">Not billing</Stamp>}
+                  {t.status === "completed" ? <Stamp tone="green">Done</Stamp> : <Stamp tone="slate">Open</Stamp>}
+                  {t.status !== "completed"
+                    ? <Btn size="sm" tone="green" onClick={() => updateTask(t.id, { status: "completed" })}>Complete</Btn>
+                    : <Btn size="sm" tone="ghost" onClick={() => updateTask(t.id, { status: "open" })}>Reopen</Btn>}
+                  <Btn size="sm" tone="ghost" onClick={() => updateTask(t.id, { notBilling: !t.notBilling })}>{t.notBilling ? "Billable" : "Not billing"}</Btn>
+                  <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => removeTask(t.id)} />
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {t.status === "completed" ? <Stamp tone="green">Done</Stamp> : <Stamp tone="slate">Open</Stamp>}
-                {t.status !== "completed"
-                  ? <Btn size="sm" tone="green" onClick={() => updateTask(t.id, { status: "completed" })}>Complete</Btn>
-                  : <Btn size="sm" tone="ghost" onClick={() => updateTask(t.id, { status: "open" })}>Reopen</Btn>}
-                <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => removeTask(t.id)} />
+              <div className="mt-1.5">
+                <select className={selectCls} style={{ ...inputStyle(), maxWidth: 220 }} value={t.contractorId || ""} onChange={(e) => updateTask(t.id, { contractorId: e.target.value })}>
+                  <option value="">Assign to vendor...</option>
+                  {contractors.map((cn) => <option key={cn.id} value={cn.id}>{cn.name}</option>)}
+                </select>
               </div>
+              {c && <NotifyPanel kind="workorder" buildingName={buildingName} aptNumber={aptNumber} description={t.description} tenant={tenant} contractor={c} />}
             </div>
           );
         })}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
-        <input className={inputCls} style={inputStyle()} placeholder="e.g. Plumbing repair" value={desc} onChange={(e) => setDesc(e.target.value)} />
+        <input className={inputCls} style={inputStyle()} placeholder="e.g. Plumbing repair, Replace tile, Patch drywall" value={desc} onChange={(e) => setDesc(e.target.value)} />
         <select className={selectCls} style={inputStyle()} value={contractorId} onChange={(e) => setContractorId(e.target.value)}>
           <option value="">Assign to vendor...</option>
           {contractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <Btn size="sm" icon={Plus} onClick={addTask}>Add task</Btn>
       </div>
+      <div className="text-xs mt-1" style={{ color: C.muted }}>Tip: separate multiple jobs with commas to add them all at once, then assign a vendor to each one below.</div>
     </div>
   );
 }
@@ -1080,6 +1117,7 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
             <span className="font-semibold" style={{ color: C.ink }}>{apartment?.tenantName || "No tenant on file"}</span>
             <span className="text-sm" style={{ color: C.muted }}>{building?.name || ""}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
             {stamp}
+            {w.notBilling && <Stamp tone="slate">Not billing</Stamp>}
             {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
           </div>
           <div className="text-sm mt-1" style={{ color: C.ink }}>{w.issue}</div>
@@ -1104,10 +1142,16 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
             <Field label="Date resolved"><input className={inputCls} style={inputStyle()} type="date" value={w.dateResolved}
               onChange={(e) => onUpdate({ ...w, dateResolved: e.target.value, status: e.target.value ? "resolved" : "in-progress" })} /></Field>
           </div>
-          <NotifyPanel kind="workorder" buildingName={building?.name || ""} aptNumber={apartment?.number || ""} description={w.issue} tenant={apartment} contractor={contractor} />
-          <TaskManager tasks={w.tasks} contractors={contractors} onChange={(tasks) => onUpdate({ ...w, tasks })} />
+          {tasks.length === 0 && contractor && (
+            <NotifyPanel kind="workorder" buildingName={building?.name || ""} aptNumber={apartment?.number || ""} description={w.issue} tenant={apartment} contractor={contractor} />
+          )}
+          <TaskManager tasks={w.tasks} contractors={contractors} buildingName={building?.name || ""} aptNumber={apartment?.number || ""} tenant={apartment}
+            onChange={(tasks) => onUpdate({ ...w, tasks })} />
           <div className="flex flex-wrap gap-2 mt-3">
             {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => ({ ...t, status: "completed" })) })}>Mark resolved</Btn>}
+            {tasks.length === 0 && (
+              <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...w, notBilling: !w.notBilling })}>{w.notBilling ? "Mark billable" : "Not billing"}</Btn>
+            )}
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(w.id)}>Remove</Btn>
           </div>
           <PhotoAttach photos={w.photos}
