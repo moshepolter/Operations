@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, Check, HelpCircle, AlertTriangle, MessageCircle,
   Trash2, ChevronDown, ChevronUp, Copy, FileText, Wrench, ShieldAlert,
   CheckCircle2, Loader2, Building2, Users, User
 } from "lucide-react";
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import { doc, onSnapshot, setDoc, runTransaction } from "firebase/firestore";
 import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "./firebase";
 
@@ -100,6 +100,22 @@ function useSynced(key, authReady, seed = []) {
 
   return [data, persist, ready];
 }
+
+// Hands out a permanent, ever-increasing invoice number (#1, #2, #3...) even
+// if invoices get deleted later. Safe if you and your boss both add an
+// invoice at the same moment — Firestore resolves it so no two invoices
+// ever get the same number.
+async function getNextInvoiceNumber() {
+  const ref = doc(db, "board", "counters");
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    const current = snap.exists() ? (snap.data().invoiceNumber || 0) : 0;
+    const next = current + 1;
+    tx.set(ref, { invoiceNumber: next }, { merge: true });
+    return next;
+  });
+}
+
 function Stamp({ children, tone }) {
   const tones = {
     green: { bg: C.greenBg, fg: C.green, bd: C.green },
@@ -287,7 +303,7 @@ function InvoiceForm({ contractors, buildings, onCreateContractor, onSave, onCan
   );
 }
 
-function InvoiceCard({ inv, contractors, buildings, onUpdate, onDelete }) {
+function InvoiceCard({ inv, contractors, buildings, onUpdate, onDelete, cardRef, forceOpenId }) {
   const [open, setOpen] = useState(false);
   const contractor = lookupContractor(contractors, inv.contractorId);
   const building = lookupBuilding(buildings, inv.buildingId);
@@ -297,11 +313,14 @@ function InvoiceCard({ inv, contractors, buildings, onUpdate, onDelete }) {
 
   const sendMessage = (text) => onUpdate({ ...inv, messages: [...messages, { from: "manager", text, date: todayISO() }] });
 
+  useEffect(() => { if (forceOpenId && forceOpenId === inv.id) setOpen(true); }, [forceOpenId, inv.id]);
+
   return (
-    <div className="rounded-lg border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+    <div ref={cardRef} className="rounded-lg border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
       <div className="p-4 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
         <div>
           <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{inv.number ?? "—"}</span>
             <span className="font-semibold" style={{ color: C.ink }}>{contractor?.name || "Unassigned vendor"}</span>
             {stamp}
             {messages.length > 0 && <Stamp tone="amber">{messages.length} msg{messages.length === 1 ? "" : "s"}</Stamp>}
@@ -331,6 +350,7 @@ function InvoiceCard({ inv, contractors, buildings, onUpdate, onDelete }) {
     </div>
   );
 }
+
 
 /* ---------------- VIOLATIONS ---------------- */
 
@@ -688,6 +708,7 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
     <div className="rounded-xl border-2 p-5" style={{ borderColor: C.hair, backgroundColor: C.card }}>
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
+          <div className="text-xs font-semibold mb-1" style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }}>Invoice #{inv.number ?? "—"}</div>
           <div className="text-lg font-bold" style={{ color: C.ink }}>{contractor?.name || "Unassigned vendor"}</div>
           <div className="text-sm mt-0.5" style={{ color: C.muted }}>{building?.name || "No building"} · {fmtDate(inv.date)}</div>
         </div>
@@ -773,6 +794,8 @@ function MainApp() {
   const [tab, setTab] = useState("invoices");
   const [showForm, setShowForm] = useState(false);
   const [bossMode, setBossMode] = useState(false);
+  const [jumpToId, setJumpToId] = useState("");
+  const invoiceCardRefs = useRef({});
 
   const [invoices, invoicesPersist, invReady] = useSynced("invoices", authReady, []);
   const [violations, violationsPersist, vioReady] = useSynced("violations", authReady, []);
@@ -856,7 +879,12 @@ function MainApp() {
 
           {showForm && tab === "invoices" && (
             <InvoiceForm contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
-              onCancel={() => setShowForm(false)} onSave={(inv) => { invoicesPersist([inv, ...invoices]); setShowForm(false); }} />
+              onCancel={() => setShowForm(false)}
+              onSave={async (inv) => {
+                const number = await getNextInvoiceNumber();
+                invoicesPersist([{ ...inv, number }, ...invoices]);
+                setShowForm(false);
+              }} />
           )}
           {showForm && tab === "violations" && (
             <ViolationForm contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
@@ -867,8 +895,28 @@ function MainApp() {
               onCancel={() => setShowForm(false)} onSave={(w) => { workordersPersist([w, ...workorders]); setShowForm(false); }} />
           )}
 
+          {tab === "invoices" && invoices.length > 0 && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium uppercase tracking-wide shrink-0" style={{ color: C.muted }}>Jump to invoice</label>
+              <select className={selectCls} style={inputStyle()} value={jumpToId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setJumpToId(id);
+                  if (id) invoiceCardRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}>
+                <option value="">Select invoice #...</option>
+                {[...invoices].sort((a, b) => (b.number ?? 0) - (a.number ?? 0)).map((inv) => {
+                  const contractor = lookupContractor(contractors, inv.contractorId);
+                  return <option key={inv.id} value={inv.id}>#{inv.number ?? "—"} — {contractor?.name || "Unassigned"} — ${Number(inv.amount).toLocaleString()}</option>;
+                })}
+              </select>
+            </div>
+          )}
+
           {tab === "invoices" && (invoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
             invoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings}
+              cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
+              forceOpenId={jumpToId}
               onUpdate={(next) => invoicesPersist(invoices.map((i) => (i.id === next.id ? next : i)))}
               onDelete={(id) => invoicesPersist(invoices.filter((i) => i.id !== id))} />))}
 
@@ -917,7 +965,11 @@ function BossPage() {
 }
 
 export default function App() {
-  const isBossRoute = typeof window !== "undefined" && window.location.pathname.replace(/\/+$/, "") === "/boss";
+  // Works two ways so the same code runs on Vercel (clean /boss URL) and on
+  // GitHub Pages, which can't rewrite paths (#/boss URL instead).
+  const path = typeof window !== "undefined" ? window.location.pathname.replace(/\/+$/, "") : "";
+  const hash = typeof window !== "undefined" ? window.location.hash.replace(/^#\/?/, "") : "";
+  const isBossRoute = path === "/boss" || hash === "boss";
   return isBossRoute ? <BossPage /> : <MainApp />;
 }
 
