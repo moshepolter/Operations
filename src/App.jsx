@@ -1022,17 +1022,22 @@ function NotifyPanel({ kind, buildingName, aptNumber, description, cureDate, ten
   );
 }
 
-function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, onChange }) {
+function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issueText, onChange }) {
   const list = tasks || [];
   const [desc, setDesc] = useState("");
   const [contractorId, setContractorId] = useState("");
+
+  const splitInto = (text) => {
+    const parts = (text || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length === 0) return;
+    onChange([...list, ...parts.map((p) => ({ id: uid(), description: p, contractorId: "", status: "open", notBilling: false }))]);
+  };
 
   const addTask = () => {
     if (!desc.trim()) return;
     const parts = desc.split(",").map((s) => s.trim()).filter(Boolean);
     if (parts.length > 1) {
-      // Comma-separated: create one task per item, unassigned — assign a vendor to each below.
-      onChange([...list, ...parts.map((p) => ({ id: uid(), description: p, contractorId: "", status: "open", notBilling: false }))]);
+      splitInto(desc);
     } else {
       onChange([...list, { id: uid(), description: parts[0], contractorId, status: "open", notBilling: false }]);
     }
@@ -1043,9 +1048,16 @@ function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, onCh
   const markAllComplete = () => onChange(list.map((t) => ({ ...t, status: "completed" })));
 
   const doneCount = list.filter((t) => t.status === "completed").length;
+  const issueHasCommas = (issueText || "").includes(",");
 
   return (
     <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+      {list.length === 0 && issueHasCommas && (
+        <div className="mb-3 p-2.5 rounded flex items-center justify-between gap-2 flex-wrap" style={{ backgroundColor: C.amberBg }}>
+          <div className="text-xs" style={{ color: C.ink }}>The job description above has commas — split it into separate vendor tasks?</div>
+          <Btn size="sm" onClick={() => splitInto(issueText)}>Split it for me</Btn>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-2">
         <div className="text-xs font-medium uppercase tracking-wide" style={{ color: C.muted }}>
           Tasks by vendor {list.length > 0 ? `(${doneCount}/${list.length} complete)` : ""}
@@ -1146,7 +1158,7 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
           {tasks.length === 0 && contractor && (
             <NotifyPanel kind="workorder" buildingName={building?.name || ""} aptNumber={apartment?.number || ""} description={w.issue} tenant={apartment} contractor={contractor} />
           )}
-          <TaskManager tasks={w.tasks} contractors={contractors} buildingName={building?.name || ""} aptNumber={apartment?.number || ""} tenant={apartment}
+          <TaskManager tasks={w.tasks} contractors={contractors} buildingName={building?.name || ""} aptNumber={apartment?.number || ""} tenant={apartment} issueText={w.issue}
             onChange={(tasks) => onUpdate({ ...w, tasks })} />
           <div className="flex flex-wrap gap-2 mt-3">
             {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => ({ ...t, status: "completed" })) })}>Mark resolved</Btn>}
