@@ -101,20 +101,22 @@ function useSynced(key, authReady, seed = []) {
   return [data, persist, ready];
 }
 
-// Hands out a permanent, ever-increasing invoice number (#1, #2, #3...) even
-// if invoices get deleted later. Safe if you and your boss both add an
-// invoice at the same moment — Firestore resolves it so no two invoices
-// ever get the same number.
-async function getNextInvoiceNumber() {
+// Hands out a permanent, ever-increasing number (#1, #2, #3...) for invoices
+// or work orders — even if items get deleted later. Safe if you and your
+// boss both add something at the same moment — Firestore resolves it so no
+// two items ever get the same number.
+async function getNextNumber(field) {
   const ref = doc(db, "board", "counters");
   return runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
-    const current = snap.exists() ? (snap.data().invoiceNumber || 0) : 0;
+    const current = snap.exists() ? (snap.data()[field] || 0) : 0;
     const next = current + 1;
-    tx.set(ref, { invoiceNumber: next }, { merge: true });
+    tx.set(ref, { [field]: next }, { merge: true });
     return next;
   });
 }
+const getNextInvoiceNumber = () => getNextNumber("invoiceNumber");
+const getNextWorkOrderNumber = () => getNextNumber("workOrderNumber");
 
 function Stamp({ children, tone }) {
   const tones = {
@@ -284,8 +286,43 @@ function MessageThread({ messages, onSend, sendAs, placeholder }) {
   );
 }
 
-function InvoiceForm({ contractors, buildings, onCreateContractor, onSave, onCancel }) {
-  const [f, setF] = useState({ contractorId: "", buildingId: "", apartmentId: "", amount: "", description: "", date: todayISO() });
+function LinkedItemPicker({ workorders, violations, buildings, linkedType, linkedId, onChange }) {
+  const completedWorkOrders = workorders.filter((w) => w.status === "resolved");
+  const value = !linkedType || linkedType === "none" ? "none" : `${linkedType}:${linkedId}`;
+  return (
+    <Field label="Link to a work order or HPD violation (optional)">
+      <select className={selectCls} style={inputStyle()} value={value}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === "none") { onChange("none", ""); return; }
+          const sep = v.indexOf(":");
+          onChange(v.slice(0, sep), v.slice(sep + 1));
+        }}>
+        <option value="none">Not linked</option>
+        <optgroup label="Completed work orders">
+          {completedWorkOrders.length === 0 && <option value="none-wo" disabled>No completed work orders yet</option>}
+          {completedWorkOrders.map((w) => {
+            const b = lookupBuilding(buildings, w.buildingId);
+            return <option key={w.id} value={`workorder:${w.id}`}>#{w.number ?? "—"} — {b?.name || "No building"} — {(w.issue || "").slice(0, 40)}</option>;
+          })}
+        </optgroup>
+        <optgroup label="HPD violations">
+          {violations.length === 0 && <option value="none-v" disabled>No violations yet</option>}
+          {violations.map((v) => {
+            const b = lookupBuilding(buildings, v.buildingId);
+            return <option key={v.id} value={`violation:${v.id}`}>#{v.violationNumber || "—"} — {b?.name || "No building"} — {(v.description || "").slice(0, 40)}</option>;
+          })}
+        </optgroup>
+      </select>
+      {completedWorkOrders.length === 0 && workorders.length > 0 && (
+        <div className="text-xs mt-1" style={{ color: C.muted }}>Work orders only show up here once marked resolved.</div>
+      )}
+    </Field>
+  );
+}
+
+function InvoiceForm({ contractors, buildings, workorders, violations, onCreateContractor, onSave, onCancel }) {
+  const [f, setF] = useState({ contractorId: "", buildingId: "", apartmentId: "", amount: "", description: "", date: todayISO(), linkedType: "none", linkedId: "" });
   const set = (k) => (e) => setF((prev) => ({ ...prev, [k]: e.target.value }));
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
@@ -294,6 +331,11 @@ function InvoiceForm({ contractors, buildings, onCreateContractor, onSave, onCan
       <BuildingApartmentPicker buildings={buildings} buildingId={f.buildingId} apartmentId={f.apartmentId}
         onChangeBuilding={(id) => setF((prev) => ({ ...prev, buildingId: id, apartmentId: "" }))} onChangeApartment={(id) => setF((prev) => ({ ...prev, apartmentId: id }))} />
       <Field label="Date submitted"><input className={inputCls} style={inputStyle()} type="date" value={f.date} onChange={set("date")} /></Field>
+      <div className="sm:col-span-2">
+        <LinkedItemPicker workorders={workorders} violations={violations} buildings={buildings}
+          linkedType={f.linkedType} linkedId={f.linkedId}
+          onChange={(linkedType, linkedId) => setF((prev) => ({ ...prev, linkedType, linkedId }))} />
+      </div>
       <div className="sm:col-span-2"><Field label="Job description"><textarea className={inputCls} style={inputStyle()} rows={2} value={f.description} onChange={set("description")} /></Field></div>
       <div className="sm:col-span-2 flex gap-2 justify-end pt-1">
         <Btn tone="ghost" onClick={onCancel}>Cancel</Btn>
@@ -303,13 +345,16 @@ function InvoiceForm({ contractors, buildings, onCreateContractor, onSave, onCan
   );
 }
 
-function InvoiceCard({ inv, contractors, buildings, onUpdate, onDelete, cardRef, forceOpenId }) {
+function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUpdate, onDelete, cardRef, forceOpenId }) {
   const [open, setOpen] = useState(false);
   const contractor = lookupContractor(contractors, inv.contractorId);
   const building = lookupBuilding(buildings, inv.buildingId);
   const messages = inv.messages || [];
   const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> :
     inv.status === "declined" ? <Stamp tone="red">Declined</Stamp> : <Stamp tone="slate">Pending</Stamp>;
+
+  const linkedWorkOrder = inv.linkedType === "workorder" ? workorders.find((w) => w.id === inv.linkedId) : null;
+  const linkedViolation = inv.linkedType === "violation" ? violations.find((v) => v.id === inv.linkedId) : null;
 
   const sendMessage = (text) => onUpdate({ ...inv, messages: [...messages, { from: "manager", text, date: todayISO() }] });
 
@@ -327,6 +372,12 @@ function InvoiceCard({ inv, contractors, buildings, onUpdate, onDelete, cardRef,
           </div>
           <div className="text-sm mt-0.5" style={{ color: C.muted }}>{building?.name || "No building"} · {fmtDate(inv.date)}</div>
           <div className="text-sm mt-1" style={{ color: C.ink }}>{inv.description}</div>
+          {(linkedWorkOrder || linkedViolation) && (
+            <div className="text-xs mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded" style={{ backgroundColor: C.paperDark, color: C.slate }}>
+              {linkedWorkOrder ? <Wrench size={11} /> : <ShieldAlert size={11} />}
+              {linkedWorkOrder ? `Work Order #${linkedWorkOrder.number ?? "—"}` : `HPD Violation #${linkedViolation.violationNumber || "—"}`}
+            </div>
+          )}
         </div>
         <div className="text-right shrink-0">
           <div className="text-lg font-semibold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>${Number(inv.amount).toLocaleString()}</div>
@@ -515,6 +566,7 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
       <div className="p-4 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
         <div>
           <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
             <span className="font-semibold" style={{ color: C.ink }}>{apartment?.tenantName || "No tenant on file"}</span>
             <span className="text-sm" style={{ color: C.muted }}>{building?.name || ""}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
             {stamp}
@@ -878,7 +930,7 @@ function MainApp() {
           )}
 
           {showForm && tab === "invoices" && (
-            <InvoiceForm contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
+            <InvoiceForm contractors={contractors} buildings={buildings} workorders={workorders} violations={violations} onCreateContractor={addContractor}
               onCancel={() => setShowForm(false)}
               onSave={async (inv) => {
                 const number = await getNextInvoiceNumber();
@@ -892,7 +944,12 @@ function MainApp() {
           )}
           {showForm && tab === "workorders" && (
             <WorkOrderForm contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
-              onCancel={() => setShowForm(false)} onSave={(w) => { workordersPersist([w, ...workorders]); setShowForm(false); }} />
+              onCancel={() => setShowForm(false)}
+              onSave={async (w) => {
+                const number = await getNextWorkOrderNumber();
+                workordersPersist([{ ...w, number }, ...workorders]);
+                setShowForm(false);
+              }} />
           )}
 
           {tab === "invoices" && invoices.length > 0 && (
@@ -914,7 +971,7 @@ function MainApp() {
           )}
 
           {tab === "invoices" && (invoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
-            invoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings}
+            invoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
               cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
               forceOpenId={jumpToId}
               onUpdate={(next) => invoicesPersist(invoices.map((i) => (i.id === next.id ? next : i)))}
