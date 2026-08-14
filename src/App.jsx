@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, Check, HelpCircle, AlertTriangle, MessageCircle,
   Trash2, ChevronDown, ChevronUp, Copy, FileText, Wrench, ShieldAlert,
-  CheckCircle2, Loader2, Building2, Users, User, Camera, Pencil
+  CheckCircle2, Loader2, Building2, Users, User, Camera, Pencil, Printer
 } from "lucide-react";
 import { doc, collection, onSnapshot, setDoc, deleteDoc, runTransaction } from "firebase/firestore";
 import { signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
@@ -555,6 +555,59 @@ function CollapsibleSection({ label, count, children, forceOpen }) {
   );
 }
 
+// Opens a clean, simple printable page in a new tab and triggers the
+// browser's print dialog — used for both the invoice and work order print
+// buttons below.
+function printRecords(title, items, columns) {
+  const win = window.open("", "_blank");
+  if (!win) { alert("Please allow pop-ups to print."); return; }
+  const styles = `
+    body { font-family: Arial, Helvetica, sans-serif; padding: 28px; color: #1B2430; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .meta { color: #8A8371; font-size: 12px; margin-bottom: 18px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #DCD5C6; font-size: 12px; vertical-align: top; }
+    th { background: #EFEADF; }
+    @media print { body { padding: 10px; } }
+  `;
+  const head = columns.map((c) => `<th>${c.label}</th>`).join("");
+  const rows = items.map((item) => `<tr>${columns.map((c) => `<td>${c.value(item) ?? "—"}</td>`).join("")}</tr>`).join("");
+  win.document.write(`<html><head><title>${title}</title><style>${styles}</style></head><body>
+    <h1>${title}</h1>
+    <div class="meta">Printed ${new Date().toLocaleString()} — ${items.length} item${items.length === 1 ? "" : "s"}</div>
+    <table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
+  </body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 300);
+}
+
+function invoiceColumns(contractors, buildings) {
+  return [
+    { label: "#", value: (i) => i.number },
+    { label: "Vendor", value: (i) => lookupContractor(contractors, i.contractorId)?.name },
+    { label: "Building", value: (i) => lookupBuilding(buildings, i.buildingId)?.name },
+    { label: "Apt", value: (i) => lookupApartment(buildings, i.buildingId, i.apartmentId)?.number },
+    { label: "Amount", value: (i) => `$${Number(i.amount).toLocaleString()}` },
+    { label: "Date", value: (i) => fmtDate(i.date) },
+    { label: "Status", value: (i) => i.status },
+    { label: "Description", value: (i) => i.description },
+  ];
+}
+function workOrderColumns(contractors, buildings) {
+  return [
+    { label: "#", value: (w) => w.number },
+    { label: "Tenant", value: (w) => lookupApartment(buildings, w.buildingId, w.apartmentId)?.tenantName },
+    { label: "Building", value: (w) => lookupBuilding(buildings, w.buildingId)?.name },
+    { label: "Apt", value: (w) => lookupApartment(buildings, w.buildingId, w.apartmentId)?.number },
+    { label: "Assigned to", value: (w) => lookupContractor(contractors, w.contractorId)?.name },
+    { label: "Issue", value: (w) => w.issue },
+    { label: "Status", value: (w) => w.status },
+    { label: "Opened", value: (w) => fmtDate(w.dateOpened) },
+    { label: "Resolved", value: (w) => fmtDate(w.dateResolved) },
+  ];
+}
+
 /* ---------------- INVOICES ---------------- */
 
 function MessageThread({ messages, onSend, sendAs, placeholder }) {
@@ -589,8 +642,18 @@ function MessageThread({ messages, onSend, sendAs, placeholder }) {
   );
 }
 
-function LinkedItemPicker({ workorders, violations, buildings, linkedType, linkedId, onChange }) {
+function LinkedItemPicker({ workorders, violations, buildings, invoices, linkedType, linkedId, onChange }) {
+  const [showLinked, setShowLinked] = useState(false);
   const completedWorkOrders = workorders.filter((w) => w.status === "resolved");
+
+  // A work order that already has a PAID invoice attached is hidden by
+  // default, so you don't accidentally double-bill the same job — but if
+  // more than one vendor worked on it, the checkbox below brings it back
+  // so you can attach a second (or third) invoice to it.
+  const paidWorkOrderIds = new Set((invoices || []).filter((i) => i.linkedType === "workorder" && i.status === "paid").map((i) => i.linkedId));
+  const openWorkOrders = completedWorkOrders.filter((w) => !paidWorkOrderIds.has(w.id));
+  const alreadyPaidWorkOrders = completedWorkOrders.filter((w) => paidWorkOrderIds.has(w.id));
+
   const value = !linkedType || linkedType === "none" ? "none" : `${linkedType}:${linkedId}`;
   return (
     <Field label="Link to a work order or HPD violation (optional)">
@@ -603,12 +666,21 @@ function LinkedItemPicker({ workorders, violations, buildings, linkedType, linke
         }}>
         <option value="none">Not linked</option>
         <optgroup label="Completed work orders">
-          {completedWorkOrders.length === 0 && <option value="none-wo" disabled>No completed work orders yet</option>}
-          {completedWorkOrders.map((w) => {
+          {openWorkOrders.length === 0 && <option value="none-wo" disabled>No completed work orders available</option>}
+          {openWorkOrders.map((w) => {
             const b = lookupBuilding(buildings, w.buildingId);
             return <option key={w.id} value={`workorder:${w.id}`}>#{w.number ?? "—"} — {b?.name || "No building"} — {(w.issue || "").slice(0, 40)}</option>;
           })}
         </optgroup>
+        {showLinked && alreadyPaidWorkOrders.length > 0 && (
+          <optgroup label="Already has a paid invoice — link another vendor">
+            {alreadyPaidWorkOrders.map((w) => {
+              const b = lookupBuilding(buildings, w.buildingId);
+              const count = (invoices || []).filter((i) => i.linkedType === "workorder" && i.linkedId === w.id && i.status === "paid").length;
+              return <option key={w.id} value={`workorder:${w.id}`}>#{w.number ?? "—"} — {b?.name || "No building"} — {(w.issue || "").slice(0, 40)} ({count} paid already)</option>;
+            })}
+          </optgroup>
+        )}
         <optgroup label="HPD violations">
           {violations.length === 0 && <option value="none-v" disabled>No violations yet</option>}
           {violations.map((v) => {
@@ -620,11 +692,17 @@ function LinkedItemPicker({ workorders, violations, buildings, linkedType, linke
       {completedWorkOrders.length === 0 && workorders.length > 0 && (
         <div className="text-xs mt-1" style={{ color: C.muted }}>Work orders only show up here once marked resolved.</div>
       )}
+      {alreadyPaidWorkOrders.length > 0 && (
+        <label className="flex items-center gap-1.5 text-xs mt-1.5" style={{ color: C.muted }}>
+          <input type="checkbox" checked={showLinked} onChange={(e) => setShowLinked(e.target.checked)} />
+          Multiple vendors on one job — show work orders that already have a paid invoice ({alreadyPaidWorkOrders.length})
+        </label>
+      )}
     </Field>
   );
 }
 
-function InvoiceForm({ contractors, buildings, workorders, violations, onCreateContractor, onSave, onCancel }) {
+function InvoiceForm({ contractors, buildings, workorders, violations, invoices, onCreateContractor, onSave, onCancel }) {
   const [f, setF] = useState({ contractorId: "", buildingId: "", apartmentId: "", amount: "", description: "", date: todayISO(), linkedType: "none", linkedId: "" });
   const set = (k) => (e) => setF((prev) => ({ ...prev, [k]: e.target.value }));
 
@@ -645,7 +723,7 @@ function InvoiceForm({ contractors, buildings, workorders, violations, onCreateC
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
       <div className="sm:col-span-2">
-        <LinkedItemPicker workorders={workorders} violations={violations} buildings={buildings}
+        <LinkedItemPicker workorders={workorders} violations={violations} buildings={buildings} invoices={invoices}
           linkedType={f.linkedType} linkedId={f.linkedId} onChange={handleLinkChange} />
         {f.linkedType !== "none" && (
           <div className="text-xs mt-1" style={{ color: C.muted }}>Building, apartment, and contractor were filled in below — change any of them if needed.</div>
@@ -1303,7 +1381,7 @@ function Dashboard({ onSignOut }) {
           )}
 
           {showForm && tab === "invoices" && (
-            <InvoiceForm contractors={contractors} buildings={buildings} workorders={workorders} violations={violations} onCreateContractor={addContractor}
+            <InvoiceForm contractors={contractors} buildings={buildings} workorders={workorders} violations={violations} invoices={invoices} onCreateContractor={addContractor}
               onCancel={() => setShowForm(false)}
               onSave={async (inv) => {
                 const number = await getNextInvoiceNumber();
@@ -1345,6 +1423,10 @@ function Dashboard({ onSignOut }) {
                   })}
                 </select>
               </div>
+              <div className="flex gap-2">
+                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Open Invoices", activeInvoices, invoiceColumns(contractors, buildings))}>Print open</Btn>
+                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Paid Invoices", paidInvoices, invoiceColumns(contractors, buildings))}>Print paid</Btn>
+              </div>
             </>
           )}
 
@@ -1374,7 +1456,13 @@ function Dashboard({ onSignOut }) {
             )))}
 
           {tab === "workorders" && workorders.length > 0 && (
-            <SearchBar value={workOrderSearch} onChange={setWorkOrderSearch} placeholder="Search by tenant, building, apartment, phone, vendor, issue..." />
+            <>
+              <SearchBar value={workOrderSearch} onChange={setWorkOrderSearch} placeholder="Search by tenant, building, apartment, phone, vendor, issue..." />
+              <div className="flex gap-2">
+                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Open Work Orders", activeWorkOrders, workOrderColumns(contractors, buildings))}>Print open</Btn>
+                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Completed Work Orders", completedWorkOrders, workOrderColumns(contractors, buildings))}>Print completed</Btn>
+              </div>
+            </>
           )}
 
           {tab === "workorders" && (activeWorkOrders.length === 0 && completedWorkOrders.length === 0 ? <Empty text="No work orders yet." /> :
