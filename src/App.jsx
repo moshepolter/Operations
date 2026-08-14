@@ -251,8 +251,21 @@ function resizeImage(file, maxDim = 900, quality = 0.65) {
   });
 }
 
+function PhotoLightbox({ src, onClose }) {
+  if (!src) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ backgroundColor: "rgba(0,0,0,0.85)" }} onClick={onClose}>
+      <img src={src} alt="" className="max-w-full max-h-full rounded-lg" onClick={(e) => e.stopPropagation()} />
+      <button onClick={onClose} className="absolute top-4 right-4 w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
+        <X size={20} />
+      </button>
+    </div>
+  );
+}
+
 function PhotoAttach({ photos, onAdd, onRemove }) {
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(null);
   const inputRef = useRef(null);
   const list = photos || [];
 
@@ -276,7 +289,7 @@ function PhotoAttach({ photos, onAdd, onRemove }) {
           {list.map((p) => (
             <div key={p.id} className="relative">
               <img src={p.dataUrl} alt={p.name} className="w-20 h-20 object-cover rounded-md border cursor-pointer" style={{ borderColor: C.hair }}
-                onClick={() => window.open(p.dataUrl, "_blank")} />
+                onClick={() => setPreview(p.dataUrl)} />
               <button onClick={() => onRemove(p.id)}
                 className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: C.red }}>
                 <X size={11} />
@@ -290,11 +303,12 @@ function PhotoAttach({ photos, onAdd, onRemove }) {
       <Btn size="sm" tone="ghost" icon={Camera} disabled={busy} onClick={() => inputRef.current?.click()}>
         {busy ? "Processing..." : "Add photo"}
       </Btn>
+      <PhotoLightbox src={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }
 
-function AmountEditor({ amount, history, onChange, editorRole, big }) {
+function AmountEditor({ amount, onChange, editorRole, big, linkText }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(amount);
 
@@ -304,21 +318,38 @@ function AmountEditor({ amount, history, onChange, editorRole, big }) {
     onChange(next, { field: "amount", from: amount, to: next, by: editorRole, date: todayISO() });
     setEditing(false);
   };
+  const cancel = () => { setVal(amount); setEditing(false); };
+
+  const amountEl = (
+    <span className={big ? "text-2xl font-bold" : "text-lg font-semibold"} style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>
+      ${Number(amount).toLocaleString()}
+    </span>
+  );
 
   if (editing) {
     return (
-      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-        <input type="number" autoFocus className={inputCls} style={{ ...inputStyle(), width: 100 }} value={val} onChange={(e) => setVal(e.target.value)} />
+      <div className="flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+        <input type="number" autoFocus className={inputCls} style={{ ...inputStyle(), width: 110 }} value={val} onChange={(e) => setVal(e.target.value)} />
         <Btn size="sm" onClick={save}>Save</Btn>
-        <Btn size="sm" tone="ghost" onClick={() => { setVal(amount); setEditing(false); }}>Cancel</Btn>
+        <Btn size="sm" tone="ghost" onClick={cancel}>Cancel</Btn>
       </div>
     );
   }
+
+  if (linkText) {
+    return (
+      <div>
+        {amountEl}
+        <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} className="block text-sm mt-1 underline" style={{ color: C.slate }}>
+          {linkText}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} className="flex items-center gap-1 hover:opacity-75">
-      <span className={big ? "text-2xl font-bold" : "text-lg font-semibold"} style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>
-        ${Number(amount).toLocaleString()}
-      </span>
+      {amountEl}
       <Pencil size={big ? 14 : 12} color={C.muted} />
     </button>
   );
@@ -473,18 +504,35 @@ function LinkedItemPicker({ workorders, violations, buildings, linkedType, linke
 function InvoiceForm({ contractors, buildings, workorders, violations, onCreateContractor, onSave, onCancel }) {
   const [f, setF] = useState({ contractorId: "", buildingId: "", apartmentId: "", amount: "", description: "", date: todayISO(), linkedType: "none", linkedId: "" });
   const set = (k) => (e) => setF((prev) => ({ ...prev, [k]: e.target.value }));
+
+  const handleLinkChange = (linkedType, linkedId) => {
+    setF((prev) => {
+      if (linkedType === "workorder") {
+        const w = workorders.find((x) => x.id === linkedId);
+        if (w) return { ...prev, linkedType, linkedId, buildingId: w.buildingId || "", apartmentId: w.apartmentId || "", contractorId: w.contractorId || prev.contractorId };
+      }
+      if (linkedType === "violation") {
+        const v = violations.find((x) => x.id === linkedId);
+        if (v) return { ...prev, linkedType, linkedId, buildingId: v.buildingId || "", apartmentId: v.apartmentId || "", contractorId: v.contractorId || prev.contractorId };
+      }
+      return { ...prev, linkedType, linkedId };
+    });
+  };
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+      <div className="sm:col-span-2">
+        <LinkedItemPicker workorders={workorders} violations={violations} buildings={buildings}
+          linkedType={f.linkedType} linkedId={f.linkedId} onChange={handleLinkChange} />
+        {f.linkedType !== "none" && (
+          <div className="text-xs mt-1" style={{ color: C.muted }}>Building, apartment, and contractor were filled in below — change any of them if needed.</div>
+        )}
+      </div>
       <ContractorPicker contractors={contractors} value={f.contractorId} onChange={(id) => setF((prev) => ({ ...prev, contractorId: id }))} onCreate={onCreateContractor} label="Vendor / contractor" />
       <Field label="Amount ($)"><input className={inputCls} style={inputStyle()} type="number" value={f.amount} onChange={set("amount")} /></Field>
       <BuildingApartmentPicker buildings={buildings} buildingId={f.buildingId} apartmentId={f.apartmentId}
         onChangeBuilding={(id) => setF((prev) => ({ ...prev, buildingId: id, apartmentId: "" }))} onChangeApartment={(id) => setF((prev) => ({ ...prev, apartmentId: id }))} />
       <Field label="Date submitted"><input className={inputCls} style={inputStyle()} type="date" value={f.date} onChange={set("date")} /></Field>
-      <div className="sm:col-span-2">
-        <LinkedItemPicker workorders={workorders} violations={violations} buildings={buildings}
-          linkedType={f.linkedType} linkedId={f.linkedId}
-          onChange={(linkedType, linkedId) => setF((prev) => ({ ...prev, linkedType, linkedId }))} />
-      </div>
       <div className="sm:col-span-2"><Field label="Job description"><textarea className={inputCls} style={inputStyle()} rows={2} value={f.description} onChange={set("description")} /></Field></div>
       <div className="sm:col-span-2 flex gap-2 justify-end pt-1">
         <Btn tone="ghost" onClick={onCancel}>Cancel</Btn>
@@ -529,7 +577,7 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
           )}
         </div>
         <div className="text-right shrink-0">
-          <AmountEditor amount={inv.amount} history={inv.history} editorRole="manager"
+          <AmountEditor amount={inv.amount} editorRole="manager"
             onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
           {open ? <ChevronUp size={16} className="ml-auto mt-1" color={C.muted} /> : <ChevronDown size={16} className="ml-auto mt-1" color={C.muted} />}
         </div>
@@ -905,6 +953,7 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
 
 function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
   const [showChat, setShowChat] = useState((inv.messages || []).length > 0);
+  const [preview, setPreview] = useState(null);
   const contractor = lookupContractor(contractors, inv.contractorId);
   const building = lookupBuilding(buildings, inv.buildingId);
   const messages = inv.messages || [];
@@ -923,7 +972,7 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
         </div>
         {stamp}
       </div>
-      <AmountEditor amount={inv.amount} history={inv.history} editorRole="boss" big
+      <AmountEditor amount={inv.amount} editorRole="boss" big linkText="Enter a different amount"
         onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
       <div className="text-base mb-4 mt-2" style={{ color: C.ink }}>{inv.description}</div>
 
@@ -954,10 +1003,11 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
           <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Photos</div>
           <div className="flex gap-2 flex-wrap">
             {inv.photos.map((p) => (
-              <img key={p.id} src={p.dataUrl} alt={p.name} onClick={() => window.open(p.dataUrl, "_blank")}
+              <img key={p.id} src={p.dataUrl} alt={p.name} onClick={() => setPreview(p.dataUrl)}
                 className="w-20 h-20 object-cover rounded-md border cursor-pointer" style={{ borderColor: C.hair }} />
             ))}
           </div>
+          <PhotoLightbox src={preview} onClose={() => setPreview(null)} />
         </div>
       )}
       {showChat && (
