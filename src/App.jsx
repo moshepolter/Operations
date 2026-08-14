@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, Check, HelpCircle, AlertTriangle, MessageCircle,
   Trash2, ChevronDown, ChevronUp, Copy, FileText, Wrench, ShieldAlert,
-  CheckCircle2, Loader2, Building2, Users, User
+  CheckCircle2, Loader2, Building2, Users, User, Camera, Pencil
 } from "lucide-react";
-import { doc, onSnapshot, setDoc, runTransaction } from "firebase/firestore";
+import { doc, collection, onSnapshot, setDoc, deleteDoc, runTransaction } from "firebase/firestore";
 import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "./firebase";
 
@@ -101,6 +101,40 @@ function useSynced(key, authReady, seed = []) {
   return [data, persist, ready];
 }
 
+// Like useSynced, but for invoices and work orders: each one gets its OWN
+// Firestore document instead of sharing one big array. This matters because
+// photos are stored as data directly in the document, and Firestore caps
+// every document at 1MB — one shared doc for everything would fill up fast
+// and break saving for every invoice at once. Individual documents mean
+// each invoice/work order has its own 1MB of room.
+function useCollectionSynced(collectionName, authReady) {
+  const [data, setData] = useState([]);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!authReady) return;
+    const colRef = collection(db, collectionName);
+    const unsub = onSnapshot(colRef, (snap) => {
+      setData(snap.docs.map((d) => d.data()));
+      setReady(true);
+    }, (err) => { console.error(`Sync error on ${collectionName}:`, err); setReady(true); });
+    return unsub;
+  }, [authReady, collectionName]);
+
+  const saveItem = async (item) => {
+    setData((prev) => (prev.some((x) => x.id === item.id) ? prev.map((x) => (x.id === item.id ? item : x)) : [item, ...prev]));
+    try { await setDoc(doc(db, collectionName, item.id), item); }
+    catch (e) { console.error(`Save failed on ${collectionName}:`, e); }
+  };
+  const deleteItem = async (id) => {
+    setData((prev) => prev.filter((x) => x.id !== id));
+    try { await deleteDoc(doc(db, collectionName, id)); }
+    catch (e) { console.error(`Delete failed on ${collectionName}:`, e); }
+  };
+
+  return [data, saveItem, deleteItem, ready];
+}
+
 // Hands out a permanent, ever-increasing number (#1, #2, #3...) for invoices
 // or work orders — even if items get deleted later. Safe if you and your
 // boss both add something at the same moment — Firestore resolves it so no
@@ -186,6 +220,121 @@ function NotesLog({ notes, onAdd }) {
           className={inputCls} style={inputStyle()}
           onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onAdd(text.trim()); setText(""); } }} />
         <Btn size="sm" onClick={() => { if (text.trim()) { onAdd(text.trim()); setText(""); } }}>Add</Btn>
+      </div>
+    </div>
+  );
+}
+
+// Shrinks and compresses a photo in the browser before storing it, so a
+// phone photo (often 3-5MB) becomes a small enough file to save safely.
+function resizeImage(file, maxDim = 900, quality = 0.65) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+          else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function PhotoAttach({ photos, onAdd, onRemove }) {
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+  const list = photos || [];
+
+  const handleFiles = async (files) => {
+    setBusy(true);
+    for (const file of Array.from(files)) {
+      try {
+        const dataUrl = await resizeImage(file);
+        onAdd({ id: uid(), dataUrl, name: file.name, date: todayISO() });
+      } catch (e) { console.error("Photo processing failed:", e); }
+    }
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+      <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Photos</div>
+      {list.length > 0 && (
+        <div className="flex gap-2 flex-wrap mb-2">
+          {list.map((p) => (
+            <div key={p.id} className="relative">
+              <img src={p.dataUrl} alt={p.name} className="w-20 h-20 object-cover rounded-md border cursor-pointer" style={{ borderColor: C.hair }}
+                onClick={() => window.open(p.dataUrl, "_blank")} />
+              <button onClick={() => onRemove(p.id)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: C.red }}>
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept="image/*" multiple className="hidden"
+        onChange={(e) => e.target.files.length && handleFiles(e.target.files)} />
+      <Btn size="sm" tone="ghost" icon={Camera} disabled={busy} onClick={() => inputRef.current?.click()}>
+        {busy ? "Processing..." : "Add photo"}
+      </Btn>
+    </div>
+  );
+}
+
+function AmountEditor({ amount, history, onChange, editorRole, big }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(amount);
+
+  const save = () => {
+    const next = Number(val);
+    if (!next || next === Number(amount)) { setEditing(false); return; }
+    onChange(next, { field: "amount", from: amount, to: next, by: editorRole, date: todayISO() });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <input type="number" autoFocus className={inputCls} style={{ ...inputStyle(), width: 100 }} value={val} onChange={(e) => setVal(e.target.value)} />
+        <Btn size="sm" onClick={save}>Save</Btn>
+        <Btn size="sm" tone="ghost" onClick={() => { setVal(amount); setEditing(false); }}>Cancel</Btn>
+      </div>
+    );
+  }
+  return (
+    <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} className="flex items-center gap-1 hover:opacity-75">
+      <span className={big ? "text-2xl font-bold" : "text-lg font-semibold"} style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>
+        ${Number(amount).toLocaleString()}
+      </span>
+      <Pencil size={big ? 14 : 12} color={C.muted} />
+    </button>
+  );
+}
+
+function HistoryLog({ history }) {
+  if (!history || history.length === 0) return null;
+  return (
+    <div className="mt-3 pt-3 border-t text-xs" style={{ borderColor: C.hair, color: C.muted }}>
+      <div className="font-medium uppercase tracking-wide mb-1">History</div>
+      <div className="flex flex-col gap-1">
+        {history.map((h, i) => (
+          <div key={i}>
+            {fmtDate(h.date)} — amount changed from ${Number(h.from).toLocaleString()} to ${Number(h.to).toLocaleString()} ({h.by === "boss" ? "your boss" : "you"})
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -380,7 +529,8 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
           )}
         </div>
         <div className="text-right shrink-0">
-          <div className="text-lg font-semibold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>${Number(inv.amount).toLocaleString()}</div>
+          <AmountEditor amount={inv.amount} history={inv.history} editorRole="manager"
+            onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
           {open ? <ChevronUp size={16} className="ml-auto mt-1" color={C.muted} /> : <ChevronDown size={16} className="ml-auto mt-1" color={C.muted} />}
         </div>
       </div>
@@ -395,6 +545,10 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
             <div className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: C.muted }}>Conversation with your boss</div>
             <MessageThread messages={messages} onSend={sendMessage} sendAs="manager" placeholder="Reply to your boss's question..." />
           </div>
+          <HistoryLog history={inv.history} />
+          <PhotoAttach photos={inv.photos}
+            onAdd={(p) => onUpdate({ ...inv, photos: [...(inv.photos || []), p] })}
+            onRemove={(id) => onUpdate({ ...inv, photos: (inv.photos || []).filter((p) => p.id !== id) })} />
           <NotesLog notes={inv.notes || []} onAdd={(text) => onUpdate({ ...inv, notes: [...(inv.notes || []), { text, date: todayISO() }] })} />
         </div>
       )}
@@ -598,6 +752,9 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
             {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO() })}>Mark resolved</Btn>}
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(w.id)}>Remove</Btn>
           </div>
+          <PhotoAttach photos={w.photos}
+            onAdd={(p) => onUpdate({ ...w, photos: [...(w.photos || []), p] })}
+            onRemove={(id) => onUpdate({ ...w, photos: (w.photos || []).filter((p) => p.id !== id) })} />
           <NotesLog notes={w.notes || []} onAdd={(text) => onUpdate({ ...w, notes: [...(w.notes || []), { text, date: todayISO() }] })} />
         </div>
       )}
@@ -766,8 +923,9 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
         </div>
         {stamp}
       </div>
-      <div className="text-2xl font-bold mb-2" style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>${Number(inv.amount).toLocaleString()}</div>
-      <div className="text-base mb-4" style={{ color: C.ink }}>{inv.description}</div>
+      <AmountEditor amount={inv.amount} history={inv.history} editorRole="boss" big
+        onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
+      <div className="text-base mb-4 mt-2" style={{ color: C.ink }}>{inv.description}</div>
 
       <div className="grid grid-cols-3 gap-2">
         <button onClick={() => onUpdate({ ...inv, status: "approved" })}
@@ -790,6 +948,18 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
           )}
         </button>
       </div>
+      <HistoryLog history={inv.history} />
+      {(inv.photos || []).length > 0 && (
+        <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+          <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Photos</div>
+          <div className="flex gap-2 flex-wrap">
+            {inv.photos.map((p) => (
+              <img key={p.id} src={p.dataUrl} alt={p.name} onClick={() => window.open(p.dataUrl, "_blank")}
+                className="w-20 h-20 object-cover rounded-md border cursor-pointer" style={{ borderColor: C.hair }} />
+            ))}
+          </div>
+        </div>
+      )}
       {showChat && (
         <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
           <MessageThread messages={messages} onSend={sendMessage} sendAs="boss" placeholder="Type your question..." />
@@ -815,7 +985,7 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
         )}
         {pending.map((inv) => (
           <BossInvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings}
-            onUpdate={(next) => onUpdate(invoices.map((i) => (i.id === next.id ? next : i)))} />
+            onUpdate={onUpdate} />
         ))}
         {decided.length > 0 && (
           <div className="mt-4">
@@ -849,9 +1019,9 @@ function MainApp() {
   const [jumpToId, setJumpToId] = useState("");
   const invoiceCardRefs = useRef({});
 
-  const [invoices, invoicesPersist, invReady] = useSynced("invoices", authReady, []);
+  const [invoices, saveInvoice, deleteInvoice, invReady] = useCollectionSynced("invoices", authReady);
   const [violations, violationsPersist, vioReady] = useSynced("violations", authReady, []);
-  const [workorders, workordersPersist, wkReady] = useSynced("workorders", authReady, []);
+  const [workorders, saveWorkOrder, deleteWorkOrder, wkReady] = useCollectionSynced("workorders", authReady);
   const [contractors, contractorsPersist, conReady] = useSynced("contractors", authReady, SEED_CONTRACTORS);
   const [buildings, buildingsPersist, bldReady] = useSynced("buildings", authReady, []);
 
@@ -875,7 +1045,7 @@ function MainApp() {
   }
 
   if (bossMode) {
-    return <BossView invoices={invoices} contractors={contractors} buildings={buildings} onUpdate={invoicesPersist} onExit={() => setBossMode(false)} />;
+    return <BossView invoices={invoices} contractors={contractors} buildings={buildings} onUpdate={saveInvoice} onExit={() => setBossMode(false)} />;
   }
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
@@ -934,7 +1104,7 @@ function MainApp() {
               onCancel={() => setShowForm(false)}
               onSave={async (inv) => {
                 const number = await getNextInvoiceNumber();
-                invoicesPersist([{ ...inv, number }, ...invoices]);
+                await saveInvoice({ ...inv, number });
                 setShowForm(false);
               }} />
           )}
@@ -947,7 +1117,7 @@ function MainApp() {
               onCancel={() => setShowForm(false)}
               onSave={async (w) => {
                 const number = await getNextWorkOrderNumber();
-                workordersPersist([{ ...w, number }, ...workorders]);
+                await saveWorkOrder({ ...w, number });
                 setShowForm(false);
               }} />
           )}
@@ -974,8 +1144,8 @@ function MainApp() {
             invoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
               cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
               forceOpenId={jumpToId}
-              onUpdate={(next) => invoicesPersist(invoices.map((i) => (i.id === next.id ? next : i)))}
-              onDelete={(id) => invoicesPersist(invoices.filter((i) => i.id !== id))} />))}
+              onUpdate={saveInvoice}
+              onDelete={deleteInvoice} />))}
 
           {tab === "violations" && (violations.length === 0 ? <Empty text="No violations tracked yet." /> :
             [...violations].sort((a, b) => (a.status === "resolved") - (b.status === "resolved") || a.cureDate.localeCompare(b.cureDate)).map((v) => (
@@ -986,8 +1156,8 @@ function MainApp() {
 
           {tab === "workorders" && (workorders.length === 0 ? <Empty text="No work orders yet." /> :
             workorders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings}
-              onUpdate={(next) => workordersPersist(workorders.map((x) => (x.id === next.id ? next : x)))}
-              onDelete={(id) => workordersPersist(workorders.filter((x) => x.id !== id))} />))}
+              onUpdate={saveWorkOrder}
+              onDelete={deleteWorkOrder} />))}
 
           {tab === "directory" && (
             <DirectoryTab buildings={buildings} contractors={contractors} buildingsPersist={buildingsPersist} contractorsPersist={contractorsPersist} />
@@ -1010,7 +1180,7 @@ function Empty({ text }) {
 function BossPage() {
   useFonts();
   const authReady = useAnonAuth();
-  const [invoices, invoicesPersist, invReady] = useSynced("invoices", authReady, []);
+  const [invoices, saveInvoice, , invReady] = useCollectionSynced("invoices", authReady);
   const [contractors, , conReady] = useSynced("contractors", authReady, SEED_CONTRACTORS);
   const [buildings, , bldReady] = useSynced("buildings", authReady, []);
   const loading = !authReady || !invReady || !conReady || !bldReady;
@@ -1018,7 +1188,7 @@ function BossPage() {
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
   }
-  return <BossView invoices={invoices} contractors={contractors} buildings={buildings} onUpdate={invoicesPersist} standalone />;
+  return <BossView invoices={invoices} contractors={contractors} buildings={buildings} onUpdate={saveInvoice} standalone />;
 }
 
 export default function App() {
