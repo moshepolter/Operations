@@ -1086,7 +1086,8 @@ function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, onCh
         })}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
-        <input className={inputCls} style={inputStyle()} placeholder="e.g. Plumbing repair, Replace tile, Patch drywall" value={desc} onChange={(e) => setDesc(e.target.value)} />
+        <input className={inputCls} style={inputStyle()} placeholder="e.g. Plumbing repair, Replace tile, Patch drywall" value={desc} onChange={(e) => setDesc(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} />
         <select className={selectCls} style={inputStyle()} value={contractorId} onChange={(e) => setContractorId(e.target.value)}>
           <option value="">Assign to vendor...</option>
           {contractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
