@@ -608,6 +608,33 @@ function workOrderColumns(contractors, buildings) {
   ];
 }
 
+// One Print button with a small menu — Open only / Closed only / Both —
+// instead of two separate buttons per tab.
+function PrintButton({ title, openItems, closedItems, closedLabel, columns }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const go = (which) => {
+    setMenuOpen(false);
+    if (which === "open") printRecords(`Open ${title}`, openItems, columns);
+    else if (which === "closed") printRecords(`${closedLabel} ${title}`, closedItems, columns);
+    else printRecords(`All ${title}`, [...openItems, ...closedItems], columns);
+  };
+  return (
+    <div className="relative inline-block">
+      <Btn size="sm" tone="ghost" icon={Printer} onClick={() => setMenuOpen(!menuOpen)}>Print</Btn>
+      {menuOpen && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+          <div className="absolute z-20 mt-1 rounded-md border overflow-hidden" style={{ backgroundColor: C.card, borderColor: C.hair, minWidth: 170 }}>
+            <button onClick={() => go("open")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Open only</button>
+            <button onClick={() => go("closed")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>{closedLabel} only</button>
+            <button onClick={() => go("both")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Both</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- INVOICES ---------------- */
 
 function MessageThread({ messages, onSend, sendAs, placeholder }) {
@@ -642,60 +669,68 @@ function MessageThread({ messages, onSend, sendAs, placeholder }) {
   );
 }
 
-function LinkedItemPicker({ workorders, violations, buildings, invoices, linkedType, linkedId, onChange }) {
+function LinkedItemPicker({ workorders, violations, buildings, invoices, contractors, linkedType, linkedId, linkedTaskId, onChange }) {
   const [showLinked, setShowLinked] = useState(false);
-  const completedWorkOrders = workorders.filter((w) => w.status === "resolved");
 
-  // A work order that already has a PAID invoice attached is hidden by
-  // default, so you don't accidentally double-bill the same job — but if
-  // more than one vendor worked on it, the checkbox below brings it back
-  // so you can attach a second (or third) invoice to it.
-  const paidWorkOrderIds = new Set((invoices || []).filter((i) => i.linkedType === "workorder" && i.status === "paid").map((i) => i.linkedId));
-  const openWorkOrders = completedWorkOrders.filter((w) => !paidWorkOrderIds.has(w.id));
-  const alreadyPaidWorkOrders = completedWorkOrders.filter((w) => paidWorkOrderIds.has(w.id));
+  // Build one flat list of everything a new invoice could attach to: either
+  // a whole work order (for simple single-vendor jobs, once resolved) or a
+  // single vendor's task within a work order (as soon as THAT task is
+  // marked complete — doesn't require the whole job to be finished).
+  const items = [];
+  workorders.forEach((w) => {
+    const tasks = w.tasks || [];
+    if (tasks.length === 0) {
+      if (w.status === "resolved") items.push({ key: `${w.id}:`, workOrderId: w.id, taskId: "", w, task: null });
+    } else {
+      tasks.forEach((t) => { if (t.status === "completed") items.push({ key: `${w.id}:${t.id}`, workOrderId: w.id, taskId: t.id, w, task: t }); });
+    }
+  });
+  const isPaid = (item) => (invoices || []).some((i) => i.linkedType === "workorder" && i.status === "paid" && i.linkedId === item.workOrderId && (i.linkedTaskId || "") === item.taskId);
+  const openItems = items.filter((i) => !isPaid(i));
+  const paidItems = items.filter(isPaid);
 
-  const value = !linkedType || linkedType === "none" ? "none" : `${linkedType}:${linkedId}`;
+  const label = (item) => {
+    const b = lookupBuilding(buildings, item.w.buildingId);
+    const c = item.task ? lookupContractor(contractors, item.task.contractorId) : lookupContractor(contractors, item.w.contractorId);
+    const desc = item.task ? item.task.description : item.w.issue;
+    return `#${item.w.number ?? "—"} — ${b?.name || "No building"} — ${(desc || "").slice(0, 30)}${c ? ` (${c.name})` : ""}`;
+  };
+
+  const value = !linkedType || linkedType === "none" ? "none" : `${linkedType}:${linkedId}:${linkedTaskId || ""}`;
   return (
     <Field label="Link to a work order or HPD violation (optional)">
       <select className={selectCls} style={inputStyle()} value={value}
         onChange={(e) => {
           const v = e.target.value;
-          if (v === "none") { onChange("none", ""); return; }
-          const sep = v.indexOf(":");
-          onChange(v.slice(0, sep), v.slice(sep + 1));
+          if (v === "none") { onChange("none", "", ""); return; }
+          const parts = v.split(":");
+          onChange(parts[0], parts[1], parts[2] || "");
         }}>
         <option value="none">Not linked</option>
-        <optgroup label="Completed work orders">
-          {openWorkOrders.length === 0 && <option value="none-wo" disabled>No completed work orders available</option>}
-          {openWorkOrders.map((w) => {
-            const b = lookupBuilding(buildings, w.buildingId);
-            return <option key={w.id} value={`workorder:${w.id}`}>#{w.number ?? "—"} — {b?.name || "No building"} — {(w.issue || "").slice(0, 40)}</option>;
-          })}
+        <optgroup label="Completed work / vendor tasks">
+          {openItems.length === 0 && <option value="none-wo" disabled>Nothing completed yet to bill against</option>}
+          {openItems.map((item) => <option key={item.key} value={`workorder:${item.workOrderId}:${item.taskId}`}>{label(item)}</option>)}
         </optgroup>
-        {showLinked && alreadyPaidWorkOrders.length > 0 && (
+        {showLinked && paidItems.length > 0 && (
           <optgroup label="Already has a paid invoice — link another vendor">
-            {alreadyPaidWorkOrders.map((w) => {
-              const b = lookupBuilding(buildings, w.buildingId);
-              const count = (invoices || []).filter((i) => i.linkedType === "workorder" && i.linkedId === w.id && i.status === "paid").length;
-              return <option key={w.id} value={`workorder:${w.id}`}>#{w.number ?? "—"} — {b?.name || "No building"} — {(w.issue || "").slice(0, 40)} ({count} paid already)</option>;
-            })}
+            {paidItems.map((item) => <option key={item.key} value={`workorder:${item.workOrderId}:${item.taskId}`}>{label(item)} — paid already</option>)}
           </optgroup>
         )}
         <optgroup label="HPD violations">
           {violations.length === 0 && <option value="none-v" disabled>No violations yet</option>}
           {violations.map((v) => {
             const b = lookupBuilding(buildings, v.buildingId);
-            return <option key={v.id} value={`violation:${v.id}`}>#{v.violationNumber || "—"} — {b?.name || "No building"} — {(v.description || "").slice(0, 40)}</option>;
+            return <option key={v.id} value={`violation:${v.id}:`}>#{v.violationNumber || "—"} — {b?.name || "No building"} — {(v.description || "").slice(0, 40)}</option>;
           })}
         </optgroup>
       </select>
-      {completedWorkOrders.length === 0 && workorders.length > 0 && (
-        <div className="text-xs mt-1" style={{ color: C.muted }}>Work orders only show up here once marked resolved.</div>
+      {items.length === 0 && workorders.length > 0 && (
+        <div className="text-xs mt-1" style={{ color: C.muted }}>Nothing to link yet — mark a work order (or one of its tasks) complete first.</div>
       )}
-      {alreadyPaidWorkOrders.length > 0 && (
+      {paidItems.length > 0 && (
         <label className="flex items-center gap-1.5 text-xs mt-1.5" style={{ color: C.muted }}>
           <input type="checkbox" checked={showLinked} onChange={(e) => setShowLinked(e.target.checked)} />
-          Multiple vendors on one job — show work orders that already have a paid invoice ({alreadyPaidWorkOrders.length})
+          Multiple vendors on one job — show work that already has a paid invoice ({paidItems.length})
         </label>
       )}
     </Field>
@@ -703,30 +738,38 @@ function LinkedItemPicker({ workorders, violations, buildings, invoices, linkedT
 }
 
 function InvoiceForm({ contractors, buildings, workorders, violations, invoices, onCreateContractor, onSave, onCancel }) {
-  const [f, setF] = useState({ contractorId: "", buildingId: "", apartmentId: "", amount: "", description: "", date: todayISO(), linkedType: "none", linkedId: "" });
+  const [f, setF] = useState({ contractorId: "", buildingId: "", apartmentId: "", amount: "", description: "", date: todayISO(), linkedType: "none", linkedId: "", linkedTaskId: "" });
   const set = (k) => (e) => setF((prev) => ({ ...prev, [k]: e.target.value }));
 
-  const handleLinkChange = (linkedType, linkedId) => {
+  const handleLinkChange = (linkedType, linkedId, linkedTaskId) => {
     setF((prev) => {
       if (linkedType === "workorder") {
         const w = workorders.find((x) => x.id === linkedId);
-        if (w) return { ...prev, linkedType, linkedId, buildingId: w.buildingId || "", apartmentId: w.apartmentId || "", contractorId: w.contractorId || prev.contractorId };
+        if (w) {
+          const task = linkedTaskId ? (w.tasks || []).find((t) => t.id === linkedTaskId) : null;
+          return {
+            ...prev, linkedType, linkedId, linkedTaskId: linkedTaskId || "",
+            buildingId: w.buildingId || "", apartmentId: w.apartmentId || "",
+            contractorId: (task ? task.contractorId : w.contractorId) || prev.contractorId,
+            description: prev.description || (task ? task.description : w.issue) || "",
+          };
+        }
       }
       if (linkedType === "violation") {
         const v = violations.find((x) => x.id === linkedId);
-        if (v) return { ...prev, linkedType, linkedId, buildingId: v.buildingId || "", apartmentId: v.apartmentId || "", contractorId: v.contractorId || prev.contractorId };
+        if (v) return { ...prev, linkedType, linkedId, linkedTaskId: "", buildingId: v.buildingId || "", apartmentId: v.apartmentId || "", contractorId: v.contractorId || prev.contractorId };
       }
-      return { ...prev, linkedType, linkedId };
+      return { ...prev, linkedType, linkedId, linkedTaskId: linkedTaskId || "" };
     });
   };
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
       <div className="sm:col-span-2">
-        <LinkedItemPicker workorders={workorders} violations={violations} buildings={buildings} invoices={invoices}
-          linkedType={f.linkedType} linkedId={f.linkedId} onChange={handleLinkChange} />
+        <LinkedItemPicker workorders={workorders} violations={violations} buildings={buildings} invoices={invoices} contractors={contractors}
+          linkedType={f.linkedType} linkedId={f.linkedId} linkedTaskId={f.linkedTaskId} onChange={handleLinkChange} />
         {f.linkedType !== "none" && (
-          <div className="text-xs mt-1" style={{ color: C.muted }}>Building, apartment, and contractor were filled in below — change any of them if needed.</div>
+          <div className="text-xs mt-1" style={{ color: C.muted }}>Building, apartment, vendor, and description were filled in below — change any of them if needed.</div>
         )}
       </div>
       <ContractorPicker contractors={contractors} value={f.contractorId} onChange={(id) => setF((prev) => ({ ...prev, contractorId: id }))} onCreate={onCreateContractor} label="Vendor / contractor" />
@@ -753,6 +796,7 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
     inv.status === "declined" ? <Stamp tone="red">Declined</Stamp> : <Stamp tone="slate">Pending</Stamp>;
 
   const linkedWorkOrder = inv.linkedType === "workorder" ? workorders.find((w) => w.id === inv.linkedId) : null;
+  const linkedTask = linkedWorkOrder && inv.linkedTaskId ? (linkedWorkOrder.tasks || []).find((t) => t.id === inv.linkedTaskId) : null;
   const linkedViolation = inv.linkedType === "violation" ? violations.find((v) => v.id === inv.linkedId) : null;
 
   const sendMessage = (text) => onUpdate({ ...inv, messages: [...messages, { from: "manager", text, date: todayISO() }] });
@@ -774,7 +818,7 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
           {(linkedWorkOrder || linkedViolation) && (
             <div className="text-xs mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded" style={{ backgroundColor: C.paperDark, color: C.slate }}>
               {linkedWorkOrder ? <Wrench size={11} /> : <ShieldAlert size={11} />}
-              {linkedWorkOrder ? `Work Order #${linkedWorkOrder.number ?? "—"}` : `HPD Violation #${linkedViolation.violationNumber || "—"}`}
+              {linkedWorkOrder ? `Work Order #${linkedWorkOrder.number ?? "—"}${linkedTask ? ` — ${linkedTask.description}` : ""}` : `HPD Violation #${linkedViolation.violationNumber || "—"}`}
             </div>
           )}
         </div>
@@ -958,12 +1002,72 @@ function NotifyPanel({ kind, buildingName, aptNumber, description, cureDate, ten
   );
 }
 
+function TaskManager({ tasks, contractors, onChange }) {
+  const list = tasks || [];
+  const [desc, setDesc] = useState("");
+  const [contractorId, setContractorId] = useState("");
+
+  const addTask = () => {
+    if (!desc.trim()) return;
+    onChange([...list, { id: uid(), description: desc.trim(), contractorId, status: "open" }]);
+    setDesc(""); setContractorId("");
+  };
+  const updateTask = (id, patch) => onChange(list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  const removeTask = (id) => onChange(list.filter((t) => t.id !== id));
+  const markAllComplete = () => onChange(list.map((t) => ({ ...t, status: "completed" })));
+
+  const doneCount = list.filter((t) => t.status === "completed").length;
+
+  return (
+    <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-medium uppercase tracking-wide" style={{ color: C.muted }}>
+          Tasks by vendor {list.length > 0 ? `(${doneCount}/${list.length} complete)` : ""}
+        </div>
+        {list.length > 0 && doneCount < list.length && (
+          <Btn size="sm" tone="ghost" icon={CheckCircle2} onClick={markAllComplete}>Mark all complete</Btn>
+        )}
+      </div>
+      <div className="flex flex-col gap-2 mb-2">
+        {list.length === 0 && <div className="text-sm italic" style={{ color: C.muted }}>No tasks split out yet — leave empty for a single-vendor job.</div>}
+        {list.map((t) => {
+          const c = lookupContractor(contractors, t.contractorId);
+          return (
+            <div key={t.id} className="flex items-center justify-between gap-2 p-2 rounded" style={{ backgroundColor: C.paperDark }}>
+              <div className="text-sm min-w-0">
+                <div style={{ color: C.ink }} className="truncate">{t.description}</div>
+                <div style={{ color: C.muted }} className="text-xs">{c?.name || "Unassigned"}</div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {t.status === "completed" ? <Stamp tone="green">Done</Stamp> : <Stamp tone="slate">Open</Stamp>}
+                {t.status !== "completed"
+                  ? <Btn size="sm" tone="green" onClick={() => updateTask(t.id, { status: "completed" })}>Complete</Btn>
+                  : <Btn size="sm" tone="ghost" onClick={() => updateTask(t.id, { status: "open" })}>Reopen</Btn>}
+                <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => removeTask(t.id)} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+        <input className={inputCls} style={inputStyle()} placeholder="e.g. Plumbing repair" value={desc} onChange={(e) => setDesc(e.target.value)} />
+        <select className={selectCls} style={inputStyle()} value={contractorId} onChange={(e) => setContractorId(e.target.value)}>
+          <option value="">Assign to vendor...</option>
+          {contractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <Btn size="sm" icon={Plus} onClick={addTask}>Add task</Btn>
+      </div>
+    </div>
+  );
+}
+
 function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
   const building = lookupBuilding(buildings, w.buildingId);
   const apartment = lookupApartment(buildings, w.buildingId, w.apartmentId);
   const contractor = lookupContractor(contractors, w.contractorId);
   const days = daysBetween(w.dateOpened, w.dateResolved || todayISO());
+  const tasks = w.tasks || [];
   const stamp = w.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> :
     w.status === "in-progress" ? <Stamp tone="amber">In progress</Stamp> : <Stamp tone="slate">Open</Stamp>;
 
@@ -976,6 +1080,7 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
             <span className="font-semibold" style={{ color: C.ink }}>{apartment?.tenantName || "No tenant on file"}</span>
             <span className="text-sm" style={{ color: C.muted }}>{building?.name || ""}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
             {stamp}
+            {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
           </div>
           <div className="text-sm mt-1" style={{ color: C.ink }}>{w.issue}</div>
           <div className="text-sm mt-1" style={{ color: C.muted }}>{contractor ? `Assigned: ${contractor.name}` : "Unassigned"} · Open {days}d{w.status === "resolved" ? " (resolved)" : ""}</div>
@@ -995,13 +1100,14 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-1">
             <ContractorPicker contractors={contractors} value={w.contractorId}
-              onChange={(id) => onUpdate({ ...w, contractorId: id, status: w.status === "open" ? "in-progress" : w.status })} onCreate={() => {}} label="Assigned to" />
+              onChange={(id) => onUpdate({ ...w, contractorId: id, status: w.status === "open" ? "in-progress" : w.status })} onCreate={() => {}} label="Overall assigned to (optional if split by task below)" />
             <Field label="Date resolved"><input className={inputCls} style={inputStyle()} type="date" value={w.dateResolved}
               onChange={(e) => onUpdate({ ...w, dateResolved: e.target.value, status: e.target.value ? "resolved" : "in-progress" })} /></Field>
           </div>
           <NotifyPanel kind="workorder" buildingName={building?.name || ""} aptNumber={apartment?.number || ""} description={w.issue} tenant={apartment} contractor={contractor} />
+          <TaskManager tasks={w.tasks} contractors={contractors} onChange={(tasks) => onUpdate({ ...w, tasks })} />
           <div className="flex flex-wrap gap-2 mt-3">
-            {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO() })}>Mark resolved</Btn>}
+            {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => ({ ...t, status: "completed" })) })}>Mark resolved</Btn>}
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(w.id)}>Remove</Btn>
           </div>
           <PhotoAttach photos={w.photos}
@@ -1424,8 +1530,7 @@ function Dashboard({ onSignOut }) {
                 </select>
               </div>
               <div className="flex gap-2">
-                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Open Invoices", activeInvoices, invoiceColumns(contractors, buildings))}>Print open</Btn>
-                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Paid Invoices", paidInvoices, invoiceColumns(contractors, buildings))}>Print paid</Btn>
+                <PrintButton title="Invoices" openItems={activeInvoices} closedItems={paidInvoices} closedLabel="Paid" columns={invoiceColumns(contractors, buildings)} />
               </div>
             </>
           )}
@@ -1459,8 +1564,7 @@ function Dashboard({ onSignOut }) {
             <>
               <SearchBar value={workOrderSearch} onChange={setWorkOrderSearch} placeholder="Search by tenant, building, apartment, phone, vendor, issue..." />
               <div className="flex gap-2">
-                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Open Work Orders", activeWorkOrders, workOrderColumns(contractors, buildings))}>Print open</Btn>
-                <Btn size="sm" tone="ghost" icon={Printer} onClick={() => printRecords("Completed Work Orders", completedWorkOrders, workOrderColumns(contractors, buildings))}>Print completed</Btn>
+                <PrintButton title="Work Orders" openItems={activeWorkOrders} closedItems={completedWorkOrders} closedLabel="Completed" columns={workOrderColumns(contractors, buildings)} />
               </div>
             </>
           )}
