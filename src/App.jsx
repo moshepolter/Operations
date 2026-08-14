@@ -37,6 +37,11 @@ function useFonts() {
   }, []);
 }
 
+const ABECO_LOGO = "https://abecomanagement.com/wp-content/uploads/2016/01/AbeCo_LogoNEW.png";
+function Logo({ height = 30 }) {
+  return <img src={ABECO_LOGO} alt="Abeco Management" style={{ height, width: "auto" }} />;
+}
+
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function fmtDate(d) {
   if (!d) return "—";
@@ -106,7 +111,8 @@ function LoginScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center p-5" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
       <form onSubmit={submit} className="w-full max-w-sm p-6 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-        <div className="text-xs uppercase tracking-widest font-semibold mb-1" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Property Ops</div>
+        <div className="mb-4"><Logo height={34} /></div>
+        <div className="text-xs uppercase tracking-widest font-semibold mb-1" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Abeco Management</div>
         <h1 className="text-xl font-bold mb-4" style={{ color: C.ink }}>Sign in</h1>
         <div className="flex flex-col gap-3">
           <Field label="Email">
@@ -1045,7 +1051,7 @@ function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issu
   };
   const updateTask = (id, patch) => onChange(list.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   const removeTask = (id) => onChange(list.filter((t) => t.id !== id));
-  const markAllComplete = () => onChange(list.map((t) => ({ ...t, status: "completed" })));
+  const markAllComplete = () => onChange(list.map((t) => (t.status === "completed" ? t : { ...t, status: "completed", completedDate: todayISO() })));
 
   const doneCount = list.filter((t) => t.status === "completed").length;
   const issueHasCommas = (issueText || "").includes(",");
@@ -1080,14 +1086,15 @@ function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issu
                   {t.notBilling && <Stamp tone="slate">Not billing</Stamp>}
                   {t.status === "completed" ? <Stamp tone="green">Done</Stamp> : <Stamp tone="slate">Open</Stamp>}
                   {t.status !== "completed"
-                    ? <Btn size="sm" tone="green" onClick={() => updateTask(t.id, { status: "completed" })}>Complete</Btn>
+                    ? <Btn size="sm" tone="green" onClick={() => updateTask(t.id, { status: "completed", completedDate: todayISO() })}>Complete</Btn>
                     : <Btn size="sm" tone="ghost" onClick={() => updateTask(t.id, { status: "open" })}>Reopen</Btn>}
                   <Btn size="sm" tone="ghost" onClick={() => updateTask(t.id, { notBilling: !t.notBilling })}>{t.notBilling ? "Billable" : "Not billing"}</Btn>
                   <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => removeTask(t.id)} />
                 </div>
               </div>
               <div className="mt-1.5">
-                <select className={selectCls} style={{ ...inputStyle(), maxWidth: 220 }} value={t.contractorId || ""} onChange={(e) => updateTask(t.id, { contractorId: e.target.value })}>
+                <select className={selectCls} style={{ ...inputStyle(), maxWidth: 220 }} value={t.contractorId || ""}
+                  onChange={(e) => updateTask(t.id, { contractorId: e.target.value, assignedDate: t.assignedDate || todayISO() })}>
                   <option value="">Assign to vendor...</option>
                   {contractors.map((cn) => <option key={cn.id} value={cn.id}>{cn.name}</option>)}
                 </select>
@@ -1151,7 +1158,8 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-1">
             <ContractorPicker contractors={contractors} value={w.contractorId}
-              onChange={(id) => onUpdate({ ...w, contractorId: id, status: w.status === "open" ? "in-progress" : w.status })} onCreate={() => {}} label="Overall assigned to (optional if split by task below)" />
+              onChange={(id) => onUpdate({ ...w, contractorId: id, assignedDate: w.assignedDate || todayISO(), status: w.status === "open" ? "in-progress" : w.status })}
+              onCreate={() => {}} label="Overall assigned to (optional if split by task below)" />
             <Field label="Date resolved"><input className={inputCls} style={inputStyle()} type="date" value={w.dateResolved}
               onChange={(e) => onUpdate({ ...w, dateResolved: e.target.value, status: e.target.value ? "resolved" : "in-progress" })} /></Field>
           </div>
@@ -1161,7 +1169,7 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
           <TaskManager tasks={w.tasks} contractors={contractors} buildingName={building?.name || ""} aptNumber={apartment?.number || ""} tenant={apartment} issueText={w.issue}
             onChange={(tasks) => onUpdate({ ...w, tasks })} />
           <div className="flex flex-wrap gap-2 mt-3">
-            {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => ({ ...t, status: "completed" })) })}>Mark resolved</Btn>}
+            {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => (t.status === "completed" ? t : { ...t, status: "completed", completedDate: todayISO() })) })}>Mark resolved</Btn>}
             {tasks.length === 0 && (
               <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...w, notBilling: !w.notBilling })}>{w.notBilling ? "Mark billable" : "Not billing"}</Btn>
             )}
@@ -1255,6 +1263,62 @@ function ContractorCard({ c, onUpdate, onDelete }) {
       <input className={inputCls} style={inputStyle()} placeholder="Phone" value={c.phone} onChange={(e) => onUpdate({ ...c, phone: e.target.value })} />
       <input className={inputCls} style={inputStyle()} placeholder="Email" value={c.email} onChange={(e) => onUpdate({ ...c, email: e.target.value })} />
       <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(c.id)}>Remove</Btn>
+    </div>
+  );
+}
+
+// Turnaround time (assigned → completed) and average paid invoice amount,
+// per vendor — pulled from every work order/task they've touched and every
+// invoice billed under their name.
+function vendorStats(contractors, workorders, invoices) {
+  return contractors.map((c) => {
+    const durations = [];
+    workorders.forEach((w) => {
+      const tasks = w.tasks || [];
+      if (tasks.length === 0) {
+        if (w.contractorId === c.id && w.assignedDate && w.dateResolved) durations.push(daysBetween(w.assignedDate, w.dateResolved));
+      } else {
+        tasks.forEach((t) => { if (t.contractorId === c.id && t.assignedDate && t.completedDate) durations.push(daysBetween(t.assignedDate, t.completedDate)); });
+      }
+    });
+    const avgDays = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
+    const paidInvoices = invoices.filter((i) => i.contractorId === c.id && i.status === "paid");
+    const totalPaid = paidInvoices.reduce((a, i) => a + Number(i.amount), 0);
+    const avgInvoice = paidInvoices.length ? totalPaid / paidInvoices.length : null;
+    return { contractor: c, jobsCompleted: durations.length, avgDays, avgInvoice, totalPaid, invoiceCount: paidInvoices.length };
+  }).sort((a, b) => b.totalPaid - a.totalPaid);
+}
+
+function VendorsTab({ contractors, workorders, invoices }) {
+  const stats = vendorStats(contractors, workorders, invoices);
+  if (contractors.length === 0) return <Empty text="No contractors yet — add some in the Directory tab." />;
+  return (
+    <div className="flex flex-col gap-3">
+      {stats.map((s) => (
+        <div key={s.contractor.id} className="rounded-lg border p-4" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+          <div className="font-semibold mb-2 flex items-center gap-2" style={{ color: C.ink }}>
+            <Users size={15} color={C.slate} /> {s.contractor.name}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Jobs completed</div>
+              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.jobsCompleted}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Avg. turnaround</div>
+              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.avgDays != null ? `${s.avgDays.toFixed(1)}d` : "—"}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Avg. invoice</div>
+              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.avgInvoice != null ? `$${s.avgInvoice.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Total paid</div>
+              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>${s.totalPaid.toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1394,7 +1458,10 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
       <header className="px-5 sm:px-8 pt-6 pb-4 border-b flex items-center justify-between" style={{ borderColor: C.hair }}>
-        <h1 className="text-2xl font-bold">Invoices to review</h1>
+        <div className="flex items-center gap-3">
+          <Logo height={28} />
+          <h1 className="text-2xl font-bold">Invoices to review</h1>
+        </div>
         {!standalone && <button onClick={onExit} className="text-xs underline" style={{ color: C.muted }}>Exit</button>}
       </header>
       <main className="px-5 sm:px-8 py-5 max-w-lg mx-auto flex flex-col gap-4">
@@ -1439,7 +1506,7 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
 
 function Dashboard({ onSignOut }) {
   useFonts();
-  useEffect(() => { document.title = "Moshe's Ops Board"; }, []);
+  useEffect(() => { document.title = "Abeco Management — Ops Board"; }, []);
   const authReady = true; // already confirmed as a real, logged-in user by MainApp below
   const [tab, setTab] = useState("invoices");
   const [showForm, setShowForm] = useState(false);
@@ -1477,6 +1544,7 @@ function Dashboard({ onSignOut }) {
     { id: "violations", label: "HPD Violations", icon: ShieldAlert, count: dueViolations.length },
     { id: "workorders", label: "Work Orders", icon: Wrench, count: openWorkOrders },
     { id: "directory", label: "Directory", icon: Building2, count: 0 },
+    { id: "vendors", label: "Vendors", icon: Users, count: 0 },
   ];
 
   if (loading) {
@@ -1490,9 +1558,12 @@ function Dashboard({ onSignOut }) {
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
       <header className="px-5 sm:px-8 pt-6 pb-4 border-b" style={{ borderColor: C.hair }}>
         <div className="max-w-3xl mx-auto flex items-end justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Property Ops</div>
-            <h1 className="text-2xl font-bold mt-0.5">Moshe's Ops Board</h1>
+          <div className="flex items-center gap-3">
+            <Logo height={32} />
+            <div>
+              <div className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Abeco Management</div>
+              <h1 className="text-2xl font-bold mt-0.5">Ops Board</h1>
+            </div>
           </div>
           <div className="flex flex-col items-end gap-1.5">
             <div className="flex gap-1.5">
@@ -1643,6 +1714,10 @@ function Dashboard({ onSignOut }) {
           {tab === "directory" && (
             <DirectoryTab buildings={buildings} contractors={contractors} buildingsPersist={buildingsPersist} contractorsPersist={contractorsPersist} />
           )}
+
+          {tab === "vendors" && (
+            <VendorsTab contractors={contractors} workorders={workorders} invoices={invoices} />
+          )}
         </div>
       </main>
     </div>
@@ -1672,7 +1747,7 @@ function MainApp() {
 
 function BossPage() {
   useFonts();
-  useEffect(() => { document.title = "Invoice Approvals"; }, []);
+  useEffect(() => { document.title = "Abeco Management — Invoice Approvals"; }, []);
   const authReady = useAnonAuth();
   const [invoices, saveInvoice, , invReady] = useCollectionSynced("invoices", authReady);
   const [contractors, , conReady] = useSynced("contractors", authReady, SEED_CONTRACTORS);
