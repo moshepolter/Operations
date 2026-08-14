@@ -796,12 +796,19 @@ function InvoiceForm({ contractors, buildings, workorders, violations, invoices,
       if (linkedType === "workorder") {
         const w = workorders.find((x) => x.id === linkedId);
         if (w) {
+          const hasTasks = (w.tasks || []).length > 0;
           const task = linkedTaskId ? (w.tasks || []).find((t) => t.id === linkedTaskId) : null;
+          if (hasTasks && !task) {
+            // Work order picked, but not a specific vendor's task yet — hold
+            // off on filling in description/vendor until that's chosen, so
+            // the whole job's info doesn't leak in prematurely.
+            return { ...prev, linkedType, linkedId, linkedTaskId: "", buildingId: w.buildingId || "", apartmentId: w.apartmentId || "" };
+          }
           return {
             ...prev, linkedType, linkedId, linkedTaskId: linkedTaskId || "",
             buildingId: w.buildingId || "", apartmentId: w.apartmentId || "",
-            contractorId: (task ? task.contractorId : w.contractorId) || prev.contractorId,
-            description: prev.description || (task ? task.description : w.issue) || "",
+            contractorId: (task ? task.contractorId : w.contractorId) || "",
+            description: task ? task.description : (w.issue || ""),
           };
         }
       }
