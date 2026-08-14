@@ -517,6 +517,30 @@ function lookupApartment(buildings, buildingId, apartmentId) {
 // Builds one lowercase blob of everything searchable about an invoice or
 // work order — vendor/contractor, tenant, building, apartment, phone
 // numbers, description — so a single search box can match any of it.
+// Looks up a NYC address in the city's public PLUTO property records —
+// gives back the ZIP code and total unit count for buildings that match
+// what's typed so far. NYC only; other cities have no equivalent lookup.
+async function lookupNycAddress(query) {
+  if (!query || query.trim().length < 5) return [];
+  try {
+    const url = `https://data.cityofnewyork.us/resource/64uk-42ks.json?$q=${encodeURIComponent(query)}&$limit=6`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data
+      .filter((d) => d.address)
+      .map((d) => ({
+        address: d.address,
+        zip: d.zipcode || "",
+        borough: d.borough || "",
+        units: d.unitsres ? Number(d.unitsres) : (d.unitstotal ? Number(d.unitstotal) : null),
+      }));
+  } catch (e) {
+    console.error("NYC address lookup failed:", e);
+    return [];
+  }
+}
+
 function invoiceSearchText(inv, contractors, buildings) {
   const contractor = lookupContractor(contractors, inv.contractorId);
   const apartment = lookupApartment(buildings, inv.buildingId, inv.apartmentId);
@@ -1209,6 +1233,7 @@ function BuildingCard({ b, defaultOpen, onUpdate, onDelete }) {
           <span className="font-semibold truncate" style={{ color: C.ink }}>{b.name}</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {b.zip && <span className="text-xs" style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }}>{b.zip}</span>}
           <span className="text-xs px-1.5 py-0.5 rounded" style={{ color: C.muted, backgroundColor: C.paperDark, fontFamily: "'IBM Plex Mono', monospace" }}>
             {b.apartments.length} apt{b.apartments.length === 1 ? "" : "s"}
           </span>
@@ -1224,11 +1249,22 @@ function BuildingCard({ b, defaultOpen, onUpdate, onDelete }) {
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <Building2 size={16} color={C.slate} className="shrink-0" />
           <input className={inputCls} style={inputStyle()} value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+          {draft.zip && <span className="text-xs shrink-0" style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }}>{draft.zip}</span>}
         </div>
         <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(b.id)} />
       </div>
       <div className="px-4 py-3">
         <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Apartments</div>
+        {draft.officialUnitCount && draft.apartments.length < draft.officialUnitCount && (
+          <div className="mb-3 p-2.5 rounded flex items-center justify-between gap-2 flex-wrap" style={{ backgroundColor: C.amberBg }}>
+            <div className="text-xs" style={{ color: C.ink }}>NYC public records show {draft.officialUnitCount} units in this building — create the rest as blank slots to fill in?</div>
+            <Btn size="sm" onClick={() => setDraft((d) => {
+              const missing = d.officialUnitCount - d.apartments.length;
+              const blanks = Array.from({ length: missing }, (_, i) => ({ id: uid(), number: `Unit ${d.apartments.length + i + 1}`, tenantName: "", tenantPhone: "", tenantEmail: "" }));
+              return { ...d, apartments: [...d.apartments, ...blanks] };
+            })}>Create {draft.officialUnitCount - draft.apartments.length} apartments</Btn>
+          </div>
+        )}
         <div className="flex flex-col gap-2 mb-3">
           {draft.apartments.map((a) => (
             <div key={a.id} className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-2 rounded" style={{ backgroundColor: C.paperDark }}>
@@ -1328,12 +1364,34 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
   const [newBuilding, setNewBuilding] = useState("");
   const [newContractor, setNewContractor] = useState({ name: "", phone: "", email: "" });
   const [justAddedId, setJustAddedId] = useState(null);
+  const [addressMatches, setAddressMatches] = useState([]);
+  const [addressBusy, setAddressBusy] = useState(false);
+  const [staged, setStaged] = useState({ zip: "", units: null });
+
+  // Looks up what you're typing against NYC public property records after a
+  // short pause, so it doesn't fire on every keystroke.
+  useEffect(() => {
+    if (newBuilding.trim().length < 5) { setAddressMatches([]); return; }
+    const t = setTimeout(async () => {
+      setAddressBusy(true);
+      const results = await lookupNycAddress(newBuilding);
+      setAddressMatches(results);
+      setAddressBusy(false);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [newBuilding]);
+
+  const pickMatch = (m) => {
+    setNewBuilding(m.address);
+    setStaged({ zip: m.zip, units: m.units });
+    setAddressMatches([]);
+  };
 
   const addBuilding = () => {
     if (!newBuilding.trim()) return;
-    const b = { id: uid(), name: newBuilding.trim(), apartments: [] };
+    const b = { id: uid(), name: newBuilding.trim(), zip: staged.zip || "", officialUnitCount: staged.units || null, apartments: [] };
     buildingsPersist([...buildings, b]);
-    setNewBuilding("");
+    setNewBuilding(""); setStaged({ zip: "", units: null }); setAddressMatches([]);
     setJustAddedId(b.id);
   };
 
@@ -1346,12 +1404,30 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
 
       {view === "buildings" && (
         <>
-          <div className="flex gap-2">
-            <input className={inputCls} style={inputStyle()} placeholder="New building name / address" value={newBuilding} onChange={(e) => setNewBuilding(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") addBuilding(); }} />
-            <Btn icon={Plus} onClick={addBuilding}>Add building</Btn>
+          <div className="relative">
+            <div className="flex gap-2">
+              <input className={inputCls} style={inputStyle()} placeholder="Start typing a NYC address..." value={newBuilding}
+                onChange={(e) => { setNewBuilding(e.target.value); setStaged({ zip: "", units: null }); }}
+                onKeyDown={(e) => { if (e.key === "Enter") addBuilding(); }} />
+              <Btn icon={Plus} onClick={addBuilding}>Add building</Btn>
+            </div>
+            {addressBusy && <div className="text-xs mt-1" style={{ color: C.muted }}>Checking NYC public records...</div>}
+            {addressMatches.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full rounded-md border overflow-hidden" style={{ backgroundColor: C.card, borderColor: C.hair }}>
+                {addressMatches.map((m, i) => (
+                  <button key={i} onClick={() => pickMatch(m)} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75 border-b last:border-b-0" style={{ color: C.ink, borderColor: C.hair }}>
+                    {m.address}{m.borough ? `, ${m.borough}` : ""}{m.zip ? ` — ${m.zip}` : ""}{m.units ? ` — ${m.units} units` : ""}
+                  </button>
+                ))}
+              </div>
+            )}
+            {staged.zip && (
+              <div className="text-xs mt-1" style={{ color: C.green }}>
+                Matched: ZIP {staged.zip}{staged.units ? `, ${staged.units} units on record` : ""} — will fill in when you add it.
+              </div>
+            )}
           </div>
-          {buildings.length === 0 && <Empty text="No buildings yet. Add one above, fill in its units, then collapse it." />}
+          {buildings.length === 0 && <Empty text="No buildings yet. Start typing an address above, fill in its units, then collapse it." />}
           {buildings.map((b) => (
             <BuildingCard key={b.id} b={b} defaultOpen={b.id === justAddedId}
               onUpdate={(next) => buildingsPersist(buildings.map((x) => (x.id === next.id ? next : x)))}
