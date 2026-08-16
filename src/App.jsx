@@ -111,7 +111,7 @@ function LoginScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center p-5" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
       <form onSubmit={submit} className="w-full max-w-sm p-6 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-        <div className="mb-4"><Logo height={34} /></div>
+        <div className="mb-3"><Logo height={24} /></div>
         <div className="text-xs uppercase tracking-widest font-semibold mb-1" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Abeco Management</div>
         <h1 className="text-xl font-bold mb-4" style={{ color: C.ink }}>Sign in</h1>
         <div className="flex flex-col gap-3">
@@ -125,6 +125,179 @@ function LoginScreen() {
           <Btn type="submit" disabled={busy}>{busy ? "Signing in..." : "Sign in"}</Btn>
         </div>
       </form>
+    </div>
+  );
+}
+
+/* ---------------- QUICK UNLOCK: PIN + FACE ID ---------------- */
+// This is a LOCAL convenience lock layered on top of the real Firebase
+// login above — it never replaces it. Your email/password is still what
+// actually protects your data; this just avoids retyping it every time you
+// open the app on your own phone. The PIN is stored (as a one-way hash,
+// never the PIN itself) only in this browser/device's local storage — it's
+// never sent anywhere. Face ID/Touch ID use the device's own built-in
+// WebAuthn support; nothing biometric ever leaves the phone.
+
+const PIN_HASH_KEY = "abeco_pin_hash";
+const WEBAUTHN_ID_KEY = "abeco_webauthn_id";
+
+async function hashPin(pin) {
+  const data = new TextEncoder().encode(pin);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function hasPinSet() { return !!localStorage.getItem(PIN_HASH_KEY); }
+function hasFaceIdSet() { return !!localStorage.getItem(WEBAUTHN_ID_KEY); }
+function faceIdSupported() { return typeof window !== "undefined" && !!window.PublicKeyCredential; }
+
+async function registerFaceId() {
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const userId = crypto.getRandomValues(new Uint8Array(16));
+  const credential = await navigator.credentials.create({
+    publicKey: {
+      challenge,
+      rp: { name: "Abeco Management" },
+      user: { id: userId, name: "abeco-ops", displayName: "Abeco Ops" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+      timeout: 60000,
+    },
+  });
+  const idBytes = new Uint8Array(credential.rawId);
+  const idBase64 = btoa(String.fromCharCode(...idBytes));
+  localStorage.setItem(WEBAUTHN_ID_KEY, idBase64);
+}
+
+async function verifyFaceId() {
+  const storedId = localStorage.getItem(WEBAUTHN_ID_KEY);
+  if (!storedId || !faceIdSupported()) return false;
+  const idBytes = Uint8Array.from(atob(storedId), (c) => c.charCodeAt(0));
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    await navigator.credentials.get({
+      publicKey: { challenge, allowCredentials: [{ id: idBytes, type: "public-key" }], userVerification: "required", timeout: 60000 },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function LockScreen({ onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
+  const faceIdReady = hasFaceIdSet() && faceIdSupported();
+
+  const tryFaceId = async () => {
+    setChecking(true); setError("");
+    const ok = await verifyFaceId();
+    setChecking(false);
+    if (ok) onUnlock();
+    else setError("Face ID didn't work — enter your PIN instead.");
+  };
+
+  const submitPin = async (e) => {
+    e.preventDefault();
+    const hash = await hashPin(pin);
+    if (hash === localStorage.getItem(PIN_HASH_KEY)) {
+      onUnlock();
+    } else {
+      setError("Wrong PIN.");
+      setPin("");
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-5" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
+      <form onSubmit={submitPin} className="w-full max-w-sm p-6 rounded-lg border text-center" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+        <div className="mb-3 flex justify-center"><Logo height={24} /></div>
+        <h1 className="text-lg font-bold mb-4" style={{ color: C.ink }}>Enter PIN to unlock</h1>
+        <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8} autoComplete="off" value={pin}
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+          className={inputCls} style={{ ...inputStyle(), textAlign: "center", fontSize: 22, letterSpacing: 6 }} />
+        {error && <div className="text-sm mt-2" style={{ color: C.red }}>{error}</div>}
+        <div className="flex flex-col gap-2 mt-4">
+          <Btn type="submit">Unlock</Btn>
+          {faceIdReady && <Btn type="button" tone="ghost" disabled={checking} onClick={tryFaceId}>{checking ? "Checking..." : "Use Face ID instead"}</Btn>}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function QuickUnlockSetup({ onClose }) {
+  const [step, setStep] = useState("menu");
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [error, setError] = useState("");
+  const [pinSet, setPinSet] = useState(hasPinSet());
+  const [faceIdSet, setFaceIdSet] = useState(hasFaceIdSet());
+
+  const savePin = async (e) => {
+    e.preventDefault();
+    if (pin.length < 4) { setError("PIN needs to be at least 4 digits."); return; }
+    if (pin !== confirmPin) { setError("PINs don't match — try again."); return; }
+    localStorage.setItem(PIN_HASH_KEY, await hashPin(pin));
+    setPinSet(true); setPin(""); setConfirmPin(""); setError(""); setStep("menu");
+  };
+
+  const removePin = () => {
+    localStorage.removeItem(PIN_HASH_KEY);
+    localStorage.removeItem(WEBAUTHN_ID_KEY);
+    setPinSet(false); setFaceIdSet(false);
+  };
+
+  const setupFaceId = async () => {
+    setError("");
+    try {
+      await registerFaceId();
+      setFaceIdSet(true);
+    } catch (e) {
+      setError("Face ID setup didn't complete — your phone may not support it, or you cancelled.");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-5" style={{ backgroundColor: "rgba(0,0,0,0.5)" }}>
+      <div className="w-full max-w-sm p-5 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-bold" style={{ color: C.ink }}>Quick Unlock</h2>
+          <button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button>
+        </div>
+
+        {step === "menu" && (
+          <div className="flex flex-col gap-2">
+            <div className="text-sm" style={{ color: C.muted }}>
+              {pinSet ? "A PIN is set on this device." : "No PIN set yet — set one so you can skip retyping your password."}
+            </div>
+            <Btn onClick={() => setStep("pin")}>{pinSet ? "Change PIN" : "Set a PIN"}</Btn>
+            {pinSet && !faceIdSet && faceIdSupported() && <Btn tone="ghost" onClick={setupFaceId}>Enable Face ID / Touch ID</Btn>}
+            {faceIdSet && <div className="text-sm" style={{ color: C.green }}>Face ID is enabled on this device.</div>}
+            {pinSet && <Btn tone="ghost" onClick={removePin}>Turn off Quick Unlock</Btn>}
+            {error && <div className="text-sm" style={{ color: C.red }}>{error}</div>}
+          </div>
+        )}
+
+        {step === "pin" && (
+          <form onSubmit={savePin} className="flex flex-col gap-2">
+            <Field label="New PIN (4-8 digits)">
+              <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={inputStyle()}
+                value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} />
+            </Field>
+            <Field label="Confirm PIN">
+              <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={inputStyle()}
+                value={confirmPin} onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ""))} />
+            </Field>
+            {error && <div className="text-sm" style={{ color: C.red }}>{error}</div>}
+            <div className="flex gap-2 justify-end mt-1">
+              <Btn type="button" tone="ghost" onClick={() => { setStep("menu"); setError(""); }}>Back</Btn>
+              <Btn type="submit">Save PIN</Btn>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   );
 }
@@ -1592,14 +1765,14 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
   const paid = invoices.filter((i) => i.status === "paid");
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
-      <header className="px-4 sm:px-6 pt-4 pb-3 border-b flex items-center justify-between" style={{ borderColor: C.hair }}>
+      <header className="px-3 sm:px-5 pt-3 pb-2 border-b flex items-center justify-between" style={{ borderColor: C.hair }}>
         <div className="flex items-center gap-3">
-          <Logo height={28} />
-          <h1 className="text-xl font-bold">Invoices to review</h1>
+          <Logo height={24} />
+          <h1 className="text-lg font-bold">Invoices to review</h1>
         </div>
         {!standalone && <button onClick={onExit} className="text-xs underline" style={{ color: C.muted }}>Exit</button>}
       </header>
-      <main className="px-4 sm:px-6 py-4 max-w-lg mx-auto flex flex-col gap-3">
+      <main className="px-3 sm:px-5 py-3 max-w-lg mx-auto flex flex-col gap-2">
         {pending.length === 0 && reviewed.length === 0 && paid.length === 0 && <Empty text="No invoices yet." />}
         {pending.length === 0 && (reviewed.length > 0 || paid.length > 0) && (
           <div className="text-center py-6" style={{ color: C.muted }}>Nothing waiting on you right now.</div>
@@ -1646,6 +1819,7 @@ function Dashboard({ onSignOut }) {
   const [tab, setTab] = useState("invoices");
   const [showForm, setShowForm] = useState(false);
   const [bossMode, setBossMode] = useState(false);
+  const [showUnlockSetup, setShowUnlockSetup] = useState(false);
   const [jumpToId, setJumpToId] = useState("");
   const [jumpToPaid, setJumpToPaid] = useState(false);
   const [invoiceSearch, setInvoiceSearch] = useState("");
@@ -1691,19 +1865,22 @@ function Dashboard({ onSignOut }) {
   }
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
-      <header className="px-4 sm:px-6 pt-4 pb-3 border-b" style={{ borderColor: C.hair }}>
+      <header className="px-3 sm:px-5 pt-3 pb-2 border-b" style={{ borderColor: C.hair }}>
         <div className="max-w-3xl mx-auto flex items-end justify-between">
           <div className="flex items-center gap-3">
-            <Logo height={32} />
+            <Logo height={26} />
             <div>
               <div className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Abeco Management</div>
-              <h1 className="text-xl font-bold mt-0.5">Ops Board</h1>
+              <h1 className="text-lg font-bold mt-0.5">Ops Board</h1>
             </div>
           </div>
           <div className="flex flex-col items-end gap-1.5">
             <div className="flex gap-1.5">
               <button onClick={() => setBossMode(true)} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.slate }}>
                 Preview Boss View
+              </button>
+              <button onClick={() => setShowUnlockSetup(true)} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.slate }}>
+                Quick Unlock
               </button>
               <button onClick={onSignOut} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.muted }}>
                 Sign out
@@ -1713,8 +1890,9 @@ function Dashboard({ onSignOut }) {
           </div>
         </div>
       </header>
+      {showUnlockSetup && <QuickUnlockSetup onClose={() => setShowUnlockSetup(false)} />}
 
-      <nav className="px-4 sm:px-6 pt-3">
+      <nav className="px-3 sm:px-5 pt-2">
         <div className="max-w-3xl mx-auto flex gap-2 flex-wrap">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => { setTab(t.id); setShowForm(false); }}
@@ -1729,7 +1907,7 @@ function Dashboard({ onSignOut }) {
         </div>
       </nav>
 
-      <main className="px-4 sm:px-6 py-4">
+      <main className="px-3 sm:px-5 py-3">
         <div className="max-w-3xl mx-auto flex flex-col gap-3">
           {tab === "violations" && dueViolations.length > 0 && (
             <div className="rounded-lg p-3 flex items-start gap-2 border" style={{ backgroundColor: C.redBg, borderColor: C.red }}>
@@ -1868,10 +2046,13 @@ function Empty({ text }) {
 // instead of the app.
 function MainApp() {
   const { user, checked } = useRealAuth();
+  const [unlocked, setUnlocked] = useState(false);
+
   if (!checked) {
     return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
   }
   if (!user) return <LoginScreen />;
+  if (hasPinSet() && !unlocked) return <LockScreen onUnlock={() => setUnlocked(true)} />;
   return <Dashboard onSignOut={() => signOut(auth)} />;
 }
 
