@@ -482,22 +482,20 @@ function ContractorPicker({ contractors, value, onChange, onCreate, label = "Con
       <div className="relative">
         <input className={inputCls} style={inputStyle()} value={query} placeholder="Type to search vendors..."
           onChange={(e) => { setQuery(e.target.value); setShowMenu(true); if (value) onChange(""); }}
-          onFocus={() => setShowMenu(true)} />
+          onFocus={() => setShowMenu(true)}
+          onBlur={() => setTimeout(() => setShowMenu(false), 150)} />
         {showMenu && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
-            <div className="absolute z-20 mt-1 w-full max-h-52 overflow-y-auto rounded-md border" style={{ backgroundColor: C.card, borderColor: C.hair }}>
-              {matches.map((c) => (
-                <button key={c.id} onMouseDown={() => pick(c)} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75 border-b last:border-b-0" style={{ color: C.ink, borderColor: C.hair }}>
-                  {c.name}{c.phone ? ` — ${c.phone}` : ""}
-                </button>
-              ))}
-              {matches.length === 0 && <div className="px-3 py-2 text-sm italic" style={{ color: C.muted }}>No matches</div>}
-              <button onMouseDown={() => { setAdding(true); setShowMenu(false); }} className="block w-full text-left px-3 py-2 text-sm font-medium" style={{ color: C.slate }}>
-                + Add "{query.trim() || "new contractor"}"
+          <div className="absolute z-20 mt-1 w-full max-h-52 overflow-y-auto rounded-md border" style={{ backgroundColor: C.card, borderColor: C.hair }}>
+            {matches.map((c) => (
+              <button key={c.id} onMouseDown={() => pick(c)} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75 border-b last:border-b-0" style={{ color: C.ink, borderColor: C.hair }}>
+                {c.name}{c.phone ? ` — ${c.phone}` : ""}
               </button>
-            </div>
-          </>
+            ))}
+            {matches.length === 0 && <div className="px-3 py-2 text-sm italic" style={{ color: C.muted }}>No matches</div>}
+            <button onMouseDown={() => { setAdding(true); setShowMenu(false); }} className="block w-full text-left px-3 py-2 text-sm font-medium" style={{ color: C.slate }}>
+              + Add "{query.trim() || "new contractor"}"
+            </button>
+          </div>
         )}
       </div>
       {adding && (
