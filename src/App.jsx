@@ -1914,6 +1914,7 @@ function Dashboard({ onSignOut }) {
   const [showUnlockSetup, setShowUnlockSetup] = useState(false);
   const [jumpToId, setJumpToId] = useState("");
   const [jumpToPaid, setJumpToPaid] = useState(false);
+  const [jumpToDeclined, setJumpToDeclined] = useState(false);
   const [invoiceSearch, setInvoiceSearch] = useState("");
   const [workOrderSearch, setWorkOrderSearch] = useState("");
   const invoiceCardRefs = useRef({});
@@ -1933,8 +1934,9 @@ function Dashboard({ onSignOut }) {
   const openWorkOrders = workorders.filter((w) => w.status !== "resolved").length;
 
   const invQuery = invoiceSearch.trim().toLowerCase();
-  const activeInvoices = invoices.filter((i) => i.status !== "paid" && (!invQuery || invoiceSearchText(i, contractors, buildings).includes(invQuery)));
+  const activeInvoices = invoices.filter((i) => i.status !== "paid" && i.status !== "declined" && (!invQuery || invoiceSearchText(i, contractors, buildings).includes(invQuery)));
   const paidInvoices = invoices.filter((i) => i.status === "paid" && (!invQuery || invoiceSearchText(i, contractors, buildings).includes(invQuery)));
+  const declinedInvoices = invoices.filter((i) => i.status === "declined" && (!invQuery || invoiceSearchText(i, contractors, buildings).includes(invQuery)));
 
   const woQuery = workOrderSearch.trim().toLowerCase();
   const activeWorkOrders = workorders.filter((w) => w.status !== "resolved" && (!woQuery || workOrderSearchText(w, contractors, buildings).includes(woQuery)));
@@ -2053,6 +2055,7 @@ function Dashboard({ onSignOut }) {
                     setJumpToId(id);
                     const target = invoices.find((i) => i.id === id);
                     if (target?.status === "paid") setJumpToPaid(true);
+                    if (target?.status === "declined") setJumpToDeclined(true);
                     if (id) setTimeout(() => invoiceCardRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
                   }}>
                   <option value="">Select invoice #...</option>
@@ -2080,6 +2083,13 @@ function Dashboard({ onSignOut }) {
                 onDelete={deleteInvoice} />)}
               <CollapsibleSection label="Paid invoices" count={paidInvoices.length} forceOpen={jumpToPaid}>
                 {sortByBuilding(paidInvoices, buildings).map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
+                  cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
+                  forceOpenId={jumpToId}
+                  onUpdate={saveInvoice}
+                  onDelete={deleteInvoice} />)}
+              </CollapsibleSection>
+              <CollapsibleSection label="Declined invoices" count={declinedInvoices.length} forceOpen={jumpToDeclined}>
+                {sortByBuilding(declinedInvoices, buildings).map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
                   cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
                   forceOpenId={jumpToId}
                   onUpdate={saveInvoice}
