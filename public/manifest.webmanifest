@@ -1,0 +1,12 @@
+{
+  "name": "Abeco Management — Ops Board",
+  "short_name": "Abeco Ops",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#F7F5F0",
+  "theme_color": "#3D5A73",
+  "icons": [
+    { "src": "https://abecomanagement.com/wp-content/uploads/2016/01/AbeCo_LogoNEW.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "https://abecomanagement.com/wp-content/uploads/2016/01/AbeCo_LogoNEW.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
