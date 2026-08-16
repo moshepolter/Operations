@@ -239,7 +239,7 @@ function Field({ label, children }) {
   );
 }
 
-const inputCls = "px-3 py-2 rounded-md border bg-white text-sm focus:outline-none focus:ring-2 w-full";
+const inputCls = "px-2.5 py-1.5 rounded-md border bg-white text-sm focus:outline-none focus:ring-2 w-full";
 const selectCls = inputCls;
 function inputStyle() { return { borderColor: C.hair, color: C.ink }; }
 
@@ -250,12 +250,12 @@ function Btn({ children, onClick, tone = "slate", size = "md", icon: Icon, disab
     ghost: { bg: "transparent", fg: C.ink },
   };
   const t = tones[tone];
-  const pad = size === "sm" ? "px-2.5 py-1 text-xs" : "px-3.5 py-2 text-sm";
+  const pad = size === "sm" ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm";
   return (
     <button type={type} onClick={onClick} disabled={disabled}
       className={`inline-flex items-center gap-1.5 rounded-md font-medium transition-opacity hover:opacity-90 disabled:opacity-40 ${pad}`}
       style={{ backgroundColor: t.bg, color: t.fg, border: tone === "ghost" ? `1px solid ${C.hair}` : "none" }}>
-      {Icon && <Icon size={size === "sm" ? 13 : 15} />}
+      {Icon && <Icon size={size === "sm" ? 12 : 14} />}
       {children}
     </button>
   );
@@ -901,7 +901,7 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
 
   return (
     <div ref={cardRef} className="rounded-lg border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-      <div className="p-4 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
+      <div className="p-3 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{inv.number ?? "—"}</span>
@@ -919,14 +919,15 @@ function InvoiceCard({ inv, contractors, buildings, workorders, violations, onUp
           )}
         </div>
         <div className="text-right shrink-0">
-          <AmountEditor amount={inv.amount} editorRole="manager"
-            onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
+          <div className="text-lg font-semibold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>${Number(inv.amount).toLocaleString()}</div>
           {open ? <ChevronUp size={16} className="ml-auto mt-1" color={C.muted} /> : <ChevronDown size={16} className="ml-auto mt-1" color={C.muted} />}
         </div>
       </div>
       {open && (
-        <div className="px-4 pb-4">
-          <div className="flex flex-wrap gap-2">
+        <div className="px-3 pb-3">
+          <AmountEditor amount={inv.amount} editorRole="manager"
+            onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
+          <div className="flex flex-wrap gap-2 mt-2">
             {inv.status !== "approved" && inv.status !== "paid" && <Btn size="sm" tone="green" icon={Check} onClick={() => onUpdate({ ...inv, status: "approved" })}>Approve</Btn>}
             {inv.status !== "declined" && inv.status !== "paid" && <Btn size="sm" tone="red" icon={X} onClick={() => onUpdate({ ...inv, status: "declined" })}>Decline</Btn>}
             {inv.status === "approved" && <Btn size="sm" tone="slate" icon={CheckCircle2} onClick={() => onUpdate({ ...inv, status: "paid" })}>Mark paid</Btn>}
@@ -989,7 +990,7 @@ function ViolationCard({ v, contractors, buildings, onCreateContractor, onUpdate
 
   return (
     <div className="rounded-lg border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-      <div className="p-4 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
+      <div className="p-3 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold" style={{ color: C.ink }}>#{v.violationNumber || "—"} — {building?.name || "No building"}{apartment ? `, Apt ${apartment.number}` : ""}</span>
@@ -1001,7 +1002,7 @@ function ViolationCard({ v, contractors, buildings, onCreateContractor, onUpdate
         {open ? <ChevronUp size={16} color={C.muted} /> : <ChevronDown size={16} color={C.muted} />}
       </div>
       {open && (
-        <div className="px-4 pb-4">
+        <div className="px-3 pb-3">
           {apartment && (
             <div className="text-sm mb-3 p-3 rounded flex items-start gap-2" style={{ backgroundColor: C.paperDark }}>
               <User size={14} className="mt-0.5" color={C.slate} />
@@ -1199,7 +1200,7 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
 
   return (
     <div className="rounded-lg border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-      <div className="p-4 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
+      <div className="p-3 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
@@ -1220,7 +1221,7 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
         {open ? <ChevronUp size={16} color={C.muted} /> : <ChevronDown size={16} color={C.muted} />}
       </div>
       {open && (
-        <div className="px-4 pb-4">
+        <div className="px-3 pb-3">
           {apartment && (
             <div className="text-sm mb-3 p-2.5 rounded flex items-start gap-2" style={{ backgroundColor: C.paperDark }}>
               <User size={14} className="mt-0.5" color={C.slate} />
@@ -1530,7 +1531,7 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
   const sendMessage = (text) => onUpdate({ ...inv, messages: [...messages, { from: "boss", text, date: todayISO() }] });
 
   return (
-    <div className="rounded-xl border-2 p-5" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+    <div className="rounded-xl border-2 p-4" style={{ borderColor: C.hair, backgroundColor: C.card }}>
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
           <div className="text-xs font-semibold mb-1" style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }}>Invoice #{inv.number ?? "—"}</div>
@@ -1539,24 +1540,24 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
         </div>
         {stamp}
       </div>
-      <div className="text-2xl font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>${Number(inv.amount).toLocaleString()}</div>
+      <div className="text-xl font-bold" style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}>${Number(inv.amount).toLocaleString()}</div>
       <NegotiatedPriceBox amount={inv.amount}
         onChange={(newAmount, historyEntry) => onUpdate({ ...inv, amount: newAmount, history: [...(inv.history || []), historyEntry] })} />
       <div className="text-base mb-4" style={{ color: C.ink }}>{inv.description}</div>
 
       <div className="grid grid-cols-3 gap-2">
         <button onClick={() => onUpdate({ ...inv, status: "approved" })}
-          className="flex flex-col items-center gap-1 py-4 rounded-lg font-semibold text-white"
+          className="flex flex-col items-center gap-1 py-3 rounded-lg font-semibold text-white"
           style={{ backgroundColor: C.green }}>
           <Check size={22} /> Approve
         </button>
         <button onClick={() => onUpdate({ ...inv, status: "declined" })}
-          className="flex flex-col items-center gap-1 py-4 rounded-lg font-semibold text-white"
+          className="flex flex-col items-center gap-1 py-3 rounded-lg font-semibold text-white"
           style={{ backgroundColor: C.red }}>
           <X size={22} /> Decline
         </button>
         <button onClick={() => setShowChat(!showChat)}
-          className="flex flex-col items-center gap-1 py-4 rounded-lg font-semibold text-white relative"
+          className="flex flex-col items-center gap-1 py-3 rounded-lg font-semibold text-white relative"
           style={{ backgroundColor: C.amber }}>
           <HelpCircle size={22} /> Question
           {messages.length > 0 && (
@@ -1593,14 +1594,14 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
   const paid = invoices.filter((i) => i.status === "paid");
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
-      <header className="px-5 sm:px-8 pt-6 pb-4 border-b flex items-center justify-between" style={{ borderColor: C.hair }}>
+      <header className="px-4 sm:px-6 pt-4 pb-3 border-b flex items-center justify-between" style={{ borderColor: C.hair }}>
         <div className="flex items-center gap-3">
           <Logo height={28} />
-          <h1 className="text-2xl font-bold">Invoices to review</h1>
+          <h1 className="text-xl font-bold">Invoices to review</h1>
         </div>
         {!standalone && <button onClick={onExit} className="text-xs underline" style={{ color: C.muted }}>Exit</button>}
       </header>
-      <main className="px-5 sm:px-8 py-5 max-w-lg mx-auto flex flex-col gap-4">
+      <main className="px-4 sm:px-6 py-4 max-w-lg mx-auto flex flex-col gap-3">
         {pending.length === 0 && reviewed.length === 0 && paid.length === 0 && <Empty text="No invoices yet." />}
         {pending.length === 0 && (reviewed.length > 0 || paid.length > 0) && (
           <div className="text-center py-6" style={{ color: C.muted }}>Nothing waiting on you right now.</div>
@@ -1692,13 +1693,13 @@ function Dashboard({ onSignOut }) {
   }
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
-      <header className="px-5 sm:px-8 pt-6 pb-4 border-b" style={{ borderColor: C.hair }}>
+      <header className="px-4 sm:px-6 pt-4 pb-3 border-b" style={{ borderColor: C.hair }}>
         <div className="max-w-3xl mx-auto flex items-end justify-between">
           <div className="flex items-center gap-3">
             <Logo height={32} />
             <div>
               <div className="text-xs uppercase tracking-widest font-semibold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>Abeco Management</div>
-              <h1 className="text-2xl font-bold mt-0.5">Ops Board</h1>
+              <h1 className="text-xl font-bold mt-0.5">Ops Board</h1>
             </div>
           </div>
           <div className="flex flex-col items-end gap-1.5">
@@ -1715,7 +1716,7 @@ function Dashboard({ onSignOut }) {
         </div>
       </header>
 
-      <nav className="px-5 sm:px-8 pt-4">
+      <nav className="px-4 sm:px-6 pt-3">
         <div className="max-w-3xl mx-auto flex gap-2 flex-wrap">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => { setTab(t.id); setShowForm(false); }}
@@ -1730,7 +1731,7 @@ function Dashboard({ onSignOut }) {
         </div>
       </nav>
 
-      <main className="px-5 sm:px-8 py-5">
+      <main className="px-4 sm:px-6 py-4">
         <div className="max-w-3xl mx-auto flex flex-col gap-3">
           {tab === "violations" && dueViolations.length > 0 && (
             <div className="rounded-lg p-3 flex items-start gap-2 border" style={{ backgroundColor: C.redBg, borderColor: C.red }}>
