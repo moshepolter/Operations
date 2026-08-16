@@ -116,7 +116,7 @@ function LoginScreen() {
         <h1 className="text-xl font-bold mb-4" style={{ color: C.ink }}>Sign in</h1>
         <div className="flex flex-col gap-3">
           <Field label="Email">
-            <input type="email" required autoFocus className={inputCls} style={inputStyle()} value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input type="email" required className={inputCls} style={inputStyle()} value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
           <Field label="Password">
             <input type="password" required className={inputCls} style={inputStyle()} value={password} onChange={(e) => setPassword(e.target.value)} />
