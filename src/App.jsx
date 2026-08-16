@@ -214,9 +214,9 @@ function LockScreen({ onUnlock }) {
       <form onSubmit={submitPin} className="w-full max-w-sm p-6 rounded-lg border text-center" style={{ borderColor: C.hair, backgroundColor: C.card }}>
         <div className="mb-3 flex justify-center"><Logo height={24} /></div>
         <h1 className="text-lg font-bold mb-4" style={{ color: C.ink }}>Enter PIN to unlock</h1>
-        <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8} autoComplete="off" value={pin}
+        <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={8} autoComplete="off" value={pin}
           onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
-          className={inputCls} style={{ ...inputStyle(), textAlign: "center", fontSize: 22, letterSpacing: 6 }} />
+          className={inputCls} style={{ ...inputStyle(), textAlign: "center", fontSize: 22, letterSpacing: 6, WebkitTextSecurity: "disc" }} />
         {error && <div className="text-sm mt-2" style={{ color: C.red }}>{error}</div>}
         <div className="flex flex-col gap-2 mt-4">
           <Btn type="submit">Unlock</Btn>
@@ -283,11 +283,11 @@ function QuickUnlockSetup({ onClose }) {
         {step === "pin" && (
           <form onSubmit={savePin} className="flex flex-col gap-2">
             <Field label="New PIN (4-8 digits)">
-              <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={inputStyle()}
+              <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={{ ...inputStyle(), WebkitTextSecurity: "disc" }}
                 value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} />
             </Field>
             <Field label="Confirm PIN">
-              <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={inputStyle()}
+              <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={{ ...inputStyle(), WebkitTextSecurity: "disc" }}
                 value={confirmPin} onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ""))} />
             </Field>
             {error && <div className="text-sm" style={{ color: C.red }}>{error}</div>}
@@ -917,14 +917,17 @@ function LinkedItemPicker({ workorders, violations, buildings, invoices, contrac
   // Step 1: which work order. Only lists work orders that have at least one
   // billable thing on them (not marked "not billing") that's either
   // resolved (simple job) or has at least one completed task (split job).
+  // A "Not billing" flag on the whole work order overrides everything on
+  // it, even if individual tasks were billable.
   const eligibleWorkOrders = workorders.filter((w) => {
+    if (w.notBilling) return false;
     const tasks = w.tasks || [];
-    if (tasks.length === 0) return w.status === "resolved" && !w.notBilling;
+    if (tasks.length === 0) return w.status === "resolved";
     return tasks.some((t) => t.status === "completed" && !t.notBilling);
   });
 
   const selectedWorkOrder = linkedType === "workorder" ? workorders.find((w) => w.id === linkedId) : null;
-  const selectedTasks = selectedWorkOrder ? (selectedWorkOrder.tasks || []).filter((t) => t.status === "completed" && !t.notBilling) : [];
+  const selectedTasks = selectedWorkOrder && !selectedWorkOrder.notBilling ? (selectedWorkOrder.tasks || []).filter((t) => t.status === "completed" && !t.notBilling) : [];
   const openTasks = selectedTasks.filter((t) => !isPaid(selectedWorkOrder?.id, t.id));
   const paidTasks = selectedTasks.filter((t) => isPaid(selectedWorkOrder?.id, t.id));
 
@@ -1417,9 +1420,7 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
             onChange={(tasks) => onUpdate({ ...w, tasks, status: (tasks.length > 0 && w.status === "open") ? "in-progress" : w.status })} />
           <div className="flex flex-wrap gap-2 mt-3">
             {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => (t.status === "completed" ? t : { ...t, status: "completed", completedDate: todayISO() })) })}>Mark resolved</Btn>}
-            {tasks.length === 0 && (
-              <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...w, notBilling: !w.notBilling })}>{w.notBilling ? "Mark billable" : "Not billing"}</Btn>
-            )}
+            <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...w, notBilling: !w.notBilling })}>{w.notBilling ? "Mark billable" : "Not billing"}</Btn>
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(w.id)}>Remove</Btn>
           </div>
           <PhotoAttach photos={w.photos}
@@ -2044,9 +2045,25 @@ function Empty({ text }) {
 // Gate in front of the real dashboard — requires an actual signed-in
 // (non-anonymous) account. If nobody's logged in, shows the login screen
 // instead of the app.
+// Re-locks (requiring the PIN/Face ID screen again) any time you leave the
+// app — switch tabs, background it, turn the phone screen off — rather
+// than on a fixed timer. This never signs you out of the underlying
+// Firebase session, so it's just the quick-unlock screen next time, never
+// your email and password again. Only active once a PIN has been set up.
+function useLockOnBackground(active, onLock) {
+  useEffect(() => {
+    if (!active) return;
+    const handler = () => { if (document.visibilityState === "hidden") onLock(); };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, [active, onLock]);
+}
+
 function MainApp() {
   const { user, checked } = useRealAuth();
   const [unlocked, setUnlocked] = useState(false);
+
+  useLockOnBackground(!!user && hasPinSet(), () => setUnlocked(false));
 
   if (!checked) {
     return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
@@ -2082,6 +2099,21 @@ export default function App() {
   const path = typeof window !== "undefined" ? window.location.pathname.replace(/\/+$/, "") : "";
   const hash = typeof window !== "undefined" ? window.location.hash.replace(/^#\/?/, "") : "";
   const isBossRoute = path === "/boss" || hash === "boss";
+
+  // Swaps the "Add to Home Screen" identity (manifest + iOS title) so your
+  // boss installing from /boss gets his own distinct app icon and name,
+  // separate from your main Ops Board install.
+  useEffect(() => {
+    const manifestLink = document.getElementById("app-manifest");
+    const appleTitle = document.getElementById("apple-app-title");
+    if (isBossRoute) {
+      if (manifestLink) manifestLink.setAttribute("href", "manifest-boss.webmanifest");
+      if (appleTitle) appleTitle.setAttribute("content", "Abeco Invoices");
+    } else {
+      if (manifestLink) manifestLink.setAttribute("href", "manifest.webmanifest");
+      if (appleTitle) appleTitle.setAttribute("content", "Abeco Ops");
+    }
+  }, [isBossRoute]);
+
   return isBossRoute ? <BossPage /> : <MainApp />;
 }
-
