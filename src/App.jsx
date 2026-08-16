@@ -382,7 +382,7 @@ function NegotiatedPriceBox({ amount, onChange }) {
     <div className="mt-2 mb-3">
       <label className="text-xs font-medium uppercase tracking-wide" style={{ color: C.muted }}>Negotiated / new price</label>
       <div className="flex gap-2 mt-1">
-        <input type="number" placeholder={`Current: $${Number(amount).toLocaleString()}`} className={inputCls} style={inputStyle()}
+        <input type="text" inputMode="decimal" placeholder={`Current: $${Number(amount).toLocaleString()}`} className={inputCls} style={inputStyle()}
           value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
         <Btn size="sm" onClick={submit}>Save</Btn>
       </div>
@@ -411,7 +411,7 @@ function AmountEditor({ amount, onChange, editorRole, big, linkText }) {
   if (editing) {
     return (
       <div className="flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
-        <input type="number" autoFocus className={inputCls} style={{ ...inputStyle(), width: 110 }} value={val} onChange={(e) => setVal(e.target.value)} />
+        <input type="text" inputMode="decimal" autoFocus className={inputCls} style={{ ...inputStyle(), width: 110 }} value={val} onChange={(e) => setVal(e.target.value)} />
         <Btn size="sm" onClick={save}>Save</Btn>
         <Btn size="sm" tone="ghost" onClick={cancel}>Cancel</Btn>
       </div>
@@ -462,7 +462,7 @@ function ContractorPicker({ contractors, value, onChange, onCreate, label = "Con
   const [adding, setAdding] = useState(false);
   const [newPhone, setNewPhone] = useState("");
 
-  useEffect(() => { setQuery(selected?.name || ""); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setQuery(selected?.name || ""); setShowMenu(false); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const q = query.trim().toLowerCase();
   const matches = q ? contractors.filter((c) => c.name.toLowerCase().includes(q)) : contractors;
@@ -691,14 +691,12 @@ function PrintButton({ title, openItems, closedItems, closedLabel, columns }) {
     <div className="relative inline-block">
       <Btn size="sm" tone="ghost" icon={Printer} onClick={() => setMenuOpen(!menuOpen)}>Print</Btn>
       {menuOpen && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-          <div className="absolute z-20 mt-1 rounded-md border overflow-hidden" style={{ backgroundColor: C.card, borderColor: C.hair, minWidth: 170 }}>
-            <button onClick={() => go("open")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Open only</button>
-            <button onClick={() => go("closed")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>{closedLabel} only</button>
-            <button onClick={() => go("both")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Both</button>
-          </div>
-        </>
+        <div className="absolute z-20 mt-1 rounded-md border overflow-hidden" style={{ backgroundColor: C.card, borderColor: C.hair, minWidth: 170 }}
+          onMouseLeave={() => setMenuOpen(false)}>
+          <button onClick={() => go("open")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Open only</button>
+          <button onClick={() => go("closed")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>{closedLabel} only</button>
+          <button onClick={() => go("both")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Both</button>
+        </div>
       )}
     </div>
   );
@@ -869,7 +867,7 @@ function InvoiceForm({ contractors, buildings, workorders, violations, invoices,
         )}
       </div>
       <ContractorPicker contractors={contractors} value={f.contractorId} onChange={(id) => setF((prev) => ({ ...prev, contractorId: id }))} onCreate={onCreateContractor} label="Vendor / contractor" />
-      <Field label="Amount ($)"><input className={inputCls} style={inputStyle()} type="number" value={f.amount} onChange={set("amount")} /></Field>
+      <Field label="Amount ($)"><input className={inputCls} style={inputStyle()} type="text" inputMode="decimal" value={f.amount} onChange={set("amount")} /></Field>
       <BuildingApartmentPicker buildings={buildings} buildingId={f.buildingId} apartmentId={f.apartmentId}
         onChangeBuilding={(id) => setF((prev) => ({ ...prev, buildingId: id, apartmentId: "" }))} onChangeApartment={(id) => setF((prev) => ({ ...prev, apartmentId: id }))} />
       <Field label="Date submitted"><input className={inputCls} style={inputStyle()} type="date" value={f.date} onChange={set("date")} /></Field>
