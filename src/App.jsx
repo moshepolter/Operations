@@ -718,6 +718,18 @@ function naturalCompare(a, b) {
 function sortBuildings(buildings) {
   return [...buildings].sort((a, b) => naturalCompare(a.name, b.name));
 }
+// Sorts any list of invoices/work orders/violations by their building's
+// address, in the same numeric order as everywhere else — items with no
+// building attached sink to the end.
+function sortByBuilding(items, buildings) {
+  return [...items].sort((a, b) => {
+    const ba = lookupBuilding(buildings, a.buildingId)?.name || "";
+    const bb = lookupBuilding(buildings, b.buildingId)?.name || "";
+    if (!ba && bb) return 1;
+    if (ba && !bb) return -1;
+    return naturalCompare(ba, bb);
+  });
+}
 
 function lookupContractor(contractors, id) { return contractors.find((c) => c.id === id); }
 function lookupBuilding(buildings, id) { return buildings.find((b) => b.id === id); }
@@ -1549,35 +1561,110 @@ function vendorStats(contractors, workorders, invoices) {
   }).sort((a, b) => b.totalPaid - a.totalPaid);
 }
 
-function VendorsTab({ contractors, workorders, invoices }) {
+// Every open work order (or open vendor task within a split job) currently
+// sitting with this contractor — used for both the "Open work orders" list
+// and the notify message.
+function vendorOpenItems(contractorId, workorders) {
+  const items = [];
+  workorders.forEach((w) => {
+    const tasks = w.tasks || [];
+    if (tasks.length === 0) {
+      if (w.contractorId === contractorId && w.status !== "resolved") {
+        items.push({ workOrder: w, description: w.issue });
+      }
+    } else {
+      tasks.forEach((t) => {
+        if (t.contractorId === contractorId && t.status !== "completed") items.push({ workOrder: w, description: t.description });
+      });
+    }
+  });
+  return items;
+}
+
+function VendorCard({ stat, workorders, buildings }) {
+  const s = stat;
+  const [expanded, setExpanded] = useState(false);
+  const [showNotify, setShowNotify] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const openItems = vendorOpenItems(s.contractor.id, workorders);
+
+  const itemLine = (item) => {
+    const b = lookupBuilding(buildings, item.workOrder.buildingId);
+    const apt = lookupApartment(buildings, item.workOrder.buildingId, item.workOrder.apartmentId);
+    return `#${item.workOrder.number ?? "—"} — ${b?.name || "No building"}${apt ? ` Apt ${apt.number}` : ""}: ${item.description}`;
+  };
+
+  const message = `Hi ${s.contractor.name}, below are all open work orders, please advise on the status:\n\n${openItems.map((i) => `- ${itemLine(i)}`).join("\n")}`;
+
+  const copyMsg = async () => {
+    try { await navigator.clipboard.writeText(message); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+  };
+
+  return (
+    <div className="rounded-lg border p-4" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+      <div className="font-semibold mb-2 flex items-center gap-2" style={{ color: C.ink }}>
+        <Users size={15} color={C.slate} /> {s.contractor.name}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Jobs completed</div>
+          <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.jobsCompleted}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Avg. turnaround</div>
+          <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.avgDays != null ? `${s.avgDays.toFixed(1)}d` : "—"}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Avg. invoice</div>
+          <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.avgInvoice != null ? `$${s.avgInvoice.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Total paid</div>
+          <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>${s.totalPaid.toLocaleString()}</div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+        <Btn size="sm" tone="ghost" onClick={() => setExpanded(!expanded)}>
+          {expanded ? "Hide" : "Show"} open work orders ({openItems.length})
+        </Btn>
+        {openItems.length > 0 && (
+          <Btn size="sm" tone="amber" icon={MessageCircle} onClick={() => setShowNotify(!showNotify)}>Notify contractor</Btn>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {openItems.length === 0 && <div className="text-sm italic" style={{ color: C.muted }}>No open work orders.</div>}
+          {openItems.map((item, i) => (
+            <div key={i} className="text-sm p-2 rounded" style={{ backgroundColor: C.paperDark, color: C.ink }}>{itemLine(item)}</div>
+          ))}
+        </div>
+      )}
+
+      {showNotify && (
+        <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+          <div className="text-sm whitespace-pre-wrap p-2.5 rounded" style={{ backgroundColor: C.paperDark, color: C.ink }}>{message}</div>
+          <div className="mt-2"><Btn size="sm" tone="ghost" icon={Copy} onClick={copyMsg}>{copied ? "Copied" : "Copy message"}</Btn></div>
+          <div className="text-xs mt-1.5" style={{ color: C.muted }}>Copies to your clipboard — paste it into Messages to {s.contractor.phone || "your contractor"}.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VendorsTab({ contractors, workorders, invoices, buildings }) {
+  const [search, setSearch] = useState("");
   const stats = vendorStats(contractors, workorders, invoices);
   if (contractors.length === 0) return <Empty text="No contractors yet — add some in the Directory tab." />;
+  const q = search.trim().toLowerCase();
+  const filtered = q ? stats.filter((s) => s.contractor.name.toLowerCase().includes(q)) : stats;
   return (
     <div className="flex flex-col gap-3">
-      {stats.map((s) => (
-        <div key={s.contractor.id} className="rounded-lg border p-4" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-          <div className="font-semibold mb-2 flex items-center gap-2" style={{ color: C.ink }}>
-            <Users size={15} color={C.slate} /> {s.contractor.name}
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Jobs completed</div>
-              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.jobsCompleted}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Avg. turnaround</div>
-              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.avgDays != null ? `${s.avgDays.toFixed(1)}d` : "—"}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Avg. invoice</div>
-              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{s.avgInvoice != null ? `$${s.avgInvoice.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase tracking-wide" style={{ color: C.muted }}>Total paid</div>
-              <div className="font-semibold" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>${s.totalPaid.toLocaleString()}</div>
-            </div>
-          </div>
-        </div>
+      {contractors.length > 1 && <SearchBar value={search} onChange={setSearch} placeholder="Search vendors..." />}
+      {filtered.length === 0 && <Empty text="No vendors match your search." />}
+      {filtered.map((s) => (
+        <VendorCard key={s.contractor.id} stat={s} workorders={workorders} buildings={buildings} />
       ))}
     </div>
   );
@@ -1980,13 +2067,13 @@ function Dashboard({ onSignOut }) {
           {tab === "invoices" && (activeInvoices.length === 0 && paidInvoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
             <>
               {activeInvoices.length === 0 && invoices.length > 0 && <Empty text="No invoices match your search." />}
-              {activeInvoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
+              {sortByBuilding(activeInvoices, buildings).map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
                 cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
                 forceOpenId={jumpToId}
                 onUpdate={saveInvoice}
                 onDelete={deleteInvoice} />)}
               <CollapsibleSection label="Paid invoices" count={paidInvoices.length} forceOpen={jumpToPaid}>
-                {paidInvoices.map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
+                {sortByBuilding(paidInvoices, buildings).map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
                   cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
                   forceOpenId={jumpToId}
                   onUpdate={saveInvoice}
@@ -2014,11 +2101,11 @@ function Dashboard({ onSignOut }) {
           {tab === "workorders" && (activeWorkOrders.length === 0 && completedWorkOrders.length === 0 ? <Empty text="No work orders yet." /> :
             <>
               {activeWorkOrders.length === 0 && workorders.length > 0 && <Empty text="No work orders match your search." />}
-              {activeWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
+              {sortByBuilding(activeWorkOrders, buildings).map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
                 onUpdate={saveWorkOrder}
                 onDelete={deleteWorkOrder} />)}
               <CollapsibleSection label="Completed work orders" count={completedWorkOrders.length}>
-                {completedWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
+                {sortByBuilding(completedWorkOrders, buildings).map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
                   onUpdate={saveWorkOrder}
                   onDelete={deleteWorkOrder} />)}
               </CollapsibleSection>
@@ -2030,7 +2117,7 @@ function Dashboard({ onSignOut }) {
           )}
 
           {tab === "vendors" && (
-            <VendorsTab contractors={contractors} workorders={workorders} invoices={invoices} />
+            <VendorsTab contractors={contractors} workorders={workorders} invoices={invoices} buildings={buildings} />
           )}
         </div>
       </main>
