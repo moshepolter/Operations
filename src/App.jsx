@@ -704,15 +704,10 @@ function BuildingApartmentPicker({ buildings, buildingId, apartmentId, onChangeB
   );
 }
 
-// Sorts addresses the way a person would — "9 Main St" before "10 Main St" —
-// instead of alphabetically, which would put "10" before "9".
+// Groups addresses by their leading digit — all the "1..."s together, then
+// all the "2..."s, etc. — using plain text comparison rather than sorting
+// by the full numeric value.
 function naturalCompare(a, b) {
-  const ma = (a || "").match(/^\s*(\d+)/);
-  const mb = (b || "").match(/^\s*(\d+)/);
-  if (ma && mb) {
-    const diff = parseInt(ma[1], 10) - parseInt(mb[1], 10);
-    if (diff !== 0) return diff;
-  }
   return (a || "").localeCompare(b || "");
 }
 function sortBuildings(buildings) {
@@ -934,8 +929,8 @@ function LinkedItemPicker({ workorders, violations, buildings, invoices, contrac
   const eligibleWorkOrders = workorders.filter((w) => {
     if (w.notBilling) return false;
     const tasks = w.tasks || [];
-    if (tasks.length === 0) return w.status === "resolved";
-    return tasks.some((t) => t.status === "completed" && !t.notBilling);
+    if (tasks.length === 0) return w.status === "resolved" && !isPaid(w.id, "");
+    return tasks.some((t) => t.status === "completed" && !t.notBilling && !isPaid(w.id, t.id));
   });
 
   const selectedWorkOrder = linkedType === "workorder" ? workorders.find((w) => w.id === linkedId) : null;
@@ -1548,9 +1543,17 @@ function vendorStats(contractors, workorders, invoices) {
     workorders.forEach((w) => {
       const tasks = w.tasks || [];
       if (tasks.length === 0) {
-        if (w.contractorId === c.id && w.assignedDate && w.dateResolved) durations.push(daysBetween(w.assignedDate, w.dateResolved));
+        if (w.contractorId === c.id && w.assignedDate && w.dateResolved) {
+          const d = daysBetween(w.assignedDate, w.dateResolved);
+          if (d >= 0) durations.push(d); // a negative gap means bad/manually-backdated data — skip it rather than show a nonsense average
+        }
       } else {
-        tasks.forEach((t) => { if (t.contractorId === c.id && t.assignedDate && t.completedDate) durations.push(daysBetween(t.assignedDate, t.completedDate)); });
+        tasks.forEach((t) => {
+          if (t.contractorId === c.id && t.assignedDate && t.completedDate) {
+            const d = daysBetween(t.assignedDate, t.completedDate);
+            if (d >= 0) durations.push(d);
+          }
+        });
       }
     });
     const avgDays = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
@@ -1591,7 +1594,8 @@ function VendorCard({ stat, workorders, buildings }) {
   const itemLine = (item) => {
     const b = lookupBuilding(buildings, item.workOrder.buildingId);
     const apt = lookupApartment(buildings, item.workOrder.buildingId, item.workOrder.apartmentId);
-    return `#${item.workOrder.number ?? "—"} — ${b?.name || "No building"}${apt ? ` Apt ${apt.number}` : ""}: ${item.description}`;
+    const tenant = apt?.tenantName ? ` — Tenant: ${apt.tenantName}${apt.tenantPhone ? ` (${apt.tenantPhone})` : ""}` : "";
+    return `#${item.workOrder.number ?? "—"} — ${b?.name || "No building"}${apt ? ` Apt ${apt.number}` : ""}: ${item.description}${tenant}`;
   };
 
   const message = `Hi ${s.contractor.name}, below are all open work orders, please advise on the status:\n\n${openItems.map((i) => `- ${itemLine(i)}`).join("\n")}`;
@@ -2066,7 +2070,9 @@ function Dashboard({ onSignOut }) {
 
           {tab === "invoices" && (activeInvoices.length === 0 && paidInvoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
             <>
-              {activeInvoices.length === 0 && invoices.length > 0 && <Empty text="No invoices match your search." />}
+              {activeInvoices.length === 0 && invoices.length > 0 && (
+                <Empty text={invoiceSearch.trim() ? "No invoices match your search." : "No open invoices — check Paid invoices below."} />
+              )}
               {sortByBuilding(activeInvoices, buildings).map((inv) => <InvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings} workorders={workorders} violations={violations}
                 cardRef={(el) => (invoiceCardRefs.current[inv.id] = el)}
                 forceOpenId={jumpToId}
@@ -2100,7 +2106,9 @@ function Dashboard({ onSignOut }) {
 
           {tab === "workorders" && (activeWorkOrders.length === 0 && completedWorkOrders.length === 0 ? <Empty text="No work orders yet." /> :
             <>
-              {activeWorkOrders.length === 0 && workorders.length > 0 && <Empty text="No work orders match your search." />}
+              {activeWorkOrders.length === 0 && workorders.length > 0 && (
+                <Empty text={workOrderSearch.trim() ? "No work orders match your search." : "No open work orders — check Completed work orders below."} />
+              )}
               {sortByBuilding(activeWorkOrders, buildings).map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
                 onUpdate={saveWorkOrder}
                 onDelete={deleteWorkOrder} />)}
