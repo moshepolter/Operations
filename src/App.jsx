@@ -456,28 +456,54 @@ function HistoryLog({ history }) {
 /* ---------------- PICKERS ---------------- */
 
 function ContractorPicker({ contractors, value, onChange, onCreate, label = "Contractor" }) {
+  const selected = contractors.find((c) => c.id === value);
+  const [query, setQuery] = useState(selected?.name || "");
+  const [showMenu, setShowMenu] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const save = () => {
-    if (!name.trim()) return;
-    const c = { id: uid(), name: name.trim(), phone: phone.trim(), email: "" };
-    onCreate(c); onChange(c.id);
-    setAdding(false); setName(""); setPhone("");
+  const [newPhone, setNewPhone] = useState("");
+
+  useEffect(() => { setQuery(selected?.name || ""); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const q = query.trim().toLowerCase();
+  const matches = q ? contractors.filter((c) => c.name.toLowerCase().includes(q)) : contractors;
+
+  const pick = (c) => { onChange(c.id); setQuery(c.name); setShowMenu(false); setAdding(false); };
+
+  const saveNew = () => {
+    if (!query.trim()) return;
+    const c = { id: uid(), name: query.trim(), phone: newPhone.trim(), email: "" };
+    onCreate(c);
+    onChange(c.id);
+    setAdding(false); setNewPhone(""); setShowMenu(false);
   };
+
   return (
     <Field label={label}>
-      <select className={selectCls} style={inputStyle()} value={adding ? "__new__" : (value || "")}
-        onChange={(e) => { if (e.target.value === "__new__") setAdding(true); else { setAdding(false); onChange(e.target.value); } }}>
-        <option value="">Select contractor…</option>
-        {contractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        <option value="__new__">+ Add new contractor</option>
-      </select>
+      <div className="relative">
+        <input className={inputCls} style={inputStyle()} value={query} placeholder="Type to search vendors..."
+          onChange={(e) => { setQuery(e.target.value); setShowMenu(true); if (value) onChange(""); }}
+          onFocus={() => setShowMenu(true)} />
+        {showMenu && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
+            <div className="absolute z-20 mt-1 w-full max-h-52 overflow-y-auto rounded-md border" style={{ backgroundColor: C.card, borderColor: C.hair }}>
+              {matches.map((c) => (
+                <button key={c.id} onMouseDown={() => pick(c)} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75 border-b last:border-b-0" style={{ color: C.ink, borderColor: C.hair }}>
+                  {c.name}{c.phone ? ` — ${c.phone}` : ""}
+                </button>
+              ))}
+              {matches.length === 0 && <div className="px-3 py-2 text-sm italic" style={{ color: C.muted }}>No matches</div>}
+              <button onMouseDown={() => { setAdding(true); setShowMenu(false); }} className="block w-full text-left px-3 py-2 text-sm font-medium" style={{ color: C.slate }}>
+                + Add "{query.trim() || "new contractor"}"
+              </button>
+            </div>
+          </>
+        )}
+      </div>
       {adding && (
         <div className="flex gap-2 mt-1.5">
-          <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} className={inputCls} style={inputStyle()} />
-          <input placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} className={inputCls} style={inputStyle()} />
-          <Btn size="sm" onClick={save}>Save</Btn>
+          <input placeholder="Phone" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} className={inputCls} style={inputStyle()} />
+          <Btn size="sm" onClick={saveNew}>Save</Btn>
         </div>
       )}
     </Field>
@@ -491,7 +517,7 @@ function BuildingApartmentPicker({ buildings, buildingId, apartmentId, onChangeB
       <Field label="Building">
         <select className={selectCls} style={inputStyle()} value={buildingId || ""} onChange={(e) => onChangeBuilding(e.target.value)}>
           <option value="">Select building…</option>
-          {buildings.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          {sortBuildings(buildings).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
         {buildings.length === 0 && <div className="text-xs mt-1" style={{ color: C.muted }}>No buildings yet — add one in the Directory tab.</div>}
       </Field>
@@ -505,6 +531,21 @@ function BuildingApartmentPicker({ buildings, buildingId, apartmentId, onChangeB
       </Field>
     </>
   );
+}
+
+// Sorts addresses the way a person would — "9 Main St" before "10 Main St" —
+// instead of alphabetically, which would put "10" before "9".
+function naturalCompare(a, b) {
+  const ma = (a || "").match(/^\s*(\d+)/);
+  const mb = (b || "").match(/^\s*(\d+)/);
+  if (ma && mb) {
+    const diff = parseInt(ma[1], 10) - parseInt(mb[1], 10);
+    if (diff !== 0) return diff;
+  }
+  return (a || "").localeCompare(b || "");
+}
+function sortBuildings(buildings) {
+  return [...buildings].sort((a, b) => naturalCompare(a.name, b.name));
 }
 
 function lookupContractor(contractors, id) { return contractors.find((c) => c.id === id); }
@@ -941,7 +982,7 @@ function urgency(v) {
   return { tone: "slate", label: `Due in ${d}d` };
 }
 
-function ViolationCard({ v, contractors, buildings, onUpdate, onDelete }) {
+function ViolationCard({ v, contractors, buildings, onCreateContractor, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
   const u = urgency(v);
   const building = lookupBuilding(buildings, v.buildingId);
@@ -974,7 +1015,7 @@ function ViolationCard({ v, contractors, buildings, onUpdate, onDelete }) {
           )}
           <ContractorPicker contractors={contractors} value={v.contractorId}
             onChange={(id) => onUpdate({ ...v, contractorId: id, status: v.status === "open" ? "assigned" : v.status })}
-            onCreate={() => {}} label="Assign to (contractor)" />
+            onCreate={onCreateContractor} label="Assign to (contractor)" />
           <NotifyPanel kind="violation" buildingName={building?.name || ""} aptNumber={apartment?.number || ""} description={v.description} cureDate={v.cureDate} tenant={apartment} contractor={contractor} />
           <div className="flex flex-wrap gap-2 mt-3">
             {v.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...v, status: "resolved" })}>Mark cured</Btn>}
@@ -1059,7 +1100,7 @@ function NotifyPanel({ kind, buildingName, aptNumber, description, cureDate, ten
   );
 }
 
-function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issueText, onChange }) {
+function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issueText, onCreateContractor, onChange }) {
   const list = tasks || [];
   const [desc, setDesc] = useState("");
   const [contractorId, setContractorId] = useState("");
@@ -1124,24 +1165,23 @@ function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issu
                 </div>
               </div>
               <div className="mt-1.5">
-                <select className={selectCls} style={{ ...inputStyle(), maxWidth: 220 }} value={t.contractorId || ""}
-                  onChange={(e) => updateTask(t.id, { contractorId: e.target.value, assignedDate: t.assignedDate || todayISO() })}>
-                  <option value="">Assign to vendor...</option>
-                  {contractors.map((cn) => <option key={cn.id} value={cn.id}>{cn.name}</option>)}
-                </select>
+                <ContractorPicker contractors={contractors} value={t.contractorId}
+                  onChange={(id) => updateTask(t.id, { contractorId: id, assignedDate: id ? (t.assignedDate || todayISO()) : t.assignedDate })}
+                  onCreate={onCreateContractor} label="Vendor" />
               </div>
               {c && <NotifyPanel kind="workorder" buildingName={buildingName} aptNumber={aptNumber} description={t.description} tenant={tenant} contractor={c} />}
             </div>
           );
         })}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
-        <input className={inputCls} style={inputStyle()} placeholder="e.g. Plumbing repair, Replace tile, Patch drywall" value={desc} onChange={(e) => setDesc(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} />
-        <select className={selectCls} style={inputStyle()} value={contractorId} onChange={(e) => setContractorId(e.target.value)}>
-          <option value="">Assign to vendor...</option>
-          {contractors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+        <div className="flex-1">
+          <input className={inputCls} style={inputStyle()} placeholder="e.g. Plumbing repair, Replace tile, Patch drywall" value={desc} onChange={(e) => setDesc(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTask(); } }} />
+        </div>
+        <div className="sm:w-56">
+          <ContractorPicker contractors={contractors} value={contractorId} onChange={setContractorId} onCreate={onCreateContractor} label="Vendor (optional)" />
+        </div>
         <Btn size="sm" icon={Plus} onClick={addTask}>Add task</Btn>
       </div>
       <div className="text-xs mt-1" style={{ color: C.muted }}>Tip: separate multiple jobs with commas to add them all at once, then assign a vendor to each one below.</div>
@@ -1149,7 +1189,7 @@ function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issu
   );
 }
 
-function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
+function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
   const building = lookupBuilding(buildings, w.buildingId);
   const apartment = lookupApartment(buildings, w.buildingId, w.apartmentId);
@@ -1189,8 +1229,8 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-1">
             <ContractorPicker contractors={contractors} value={w.contractorId}
-              onChange={(id) => onUpdate({ ...w, contractorId: id, assignedDate: w.assignedDate || todayISO(), status: w.status === "open" ? "in-progress" : w.status })}
-              onCreate={() => {}} label="Overall assigned to (optional if split by task below)" />
+              onChange={(id) => onUpdate({ ...w, contractorId: id, assignedDate: id ? (w.assignedDate || todayISO()) : w.assignedDate, status: w.status === "open" ? "in-progress" : w.status })}
+              onCreate={onCreateContractor} label="Overall assigned to (optional if split by task below)" />
             <Field label="Date resolved"><input className={inputCls} style={inputStyle()} type="date" value={w.dateResolved}
               onChange={(e) => onUpdate({ ...w, dateResolved: e.target.value, status: e.target.value ? "resolved" : "in-progress" })} /></Field>
           </div>
@@ -1198,6 +1238,7 @@ function WorkOrderCard({ w, contractors, buildings, onUpdate, onDelete }) {
             <NotifyPanel kind="workorder" buildingName={building?.name || ""} aptNumber={apartment?.number || ""} description={w.issue} tenant={apartment} contractor={contractor} />
           )}
           <TaskManager tasks={w.tasks} contractors={contractors} buildingName={building?.name || ""} aptNumber={apartment?.number || ""} tenant={apartment} issueText={w.issue}
+            onCreateContractor={onCreateContractor}
             onChange={(tasks) => onUpdate({ ...w, tasks })} />
           <div className="flex flex-wrap gap-2 mt-3">
             {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => (t.status === "completed" ? t : { ...t, status: "completed", completedDate: todayISO() })) })}>Mark resolved</Btn>}
@@ -1369,6 +1410,7 @@ function VendorsTab({ contractors, workorders, invoices }) {
 function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPersist }) {
   const [view, setView] = useState("buildings");
   const [newBuilding, setNewBuilding] = useState("");
+  const [buildingSearch, setBuildingSearch] = useState("");
   const [newContractor, setNewContractor] = useState({ name: "", phone: "", email: "" });
   const [justAddedId, setJustAddedId] = useState(null);
   const [addressMatches, setAddressMatches] = useState([]);
@@ -1434,12 +1476,20 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
               </div>
             )}
           </div>
+          {buildings.length > 1 && (
+            <SearchBar value={buildingSearch} onChange={setBuildingSearch} placeholder="Jump to a building — search by name or address..." />
+          )}
           {buildings.length === 0 && <Empty text="No buildings yet. Start typing an address above, fill in its units, then collapse it." />}
-          {buildings.map((b) => (
-            <BuildingCard key={b.id} b={b} defaultOpen={b.id === justAddedId}
-              onUpdate={(next) => buildingsPersist(buildings.map((x) => (x.id === next.id ? next : x)))}
-              onDelete={(id) => buildingsPersist(buildings.filter((x) => x.id !== id))} />
-          ))}
+          {(() => {
+            const q = buildingSearch.trim().toLowerCase();
+            const filtered = q ? buildings.filter((b) => (b.name || "").toLowerCase().includes(q)) : buildings;
+            if (buildings.length > 0 && filtered.length === 0) return <Empty text="No buildings match your search." />;
+            return sortBuildings(filtered).map((b) => (
+              <BuildingCard key={b.id} b={b} defaultOpen={b.id === justAddedId}
+                onUpdate={(next) => buildingsPersist(buildings.map((x) => (x.id === next.id ? next : x)))}
+                onDelete={(id) => buildingsPersist(buildings.filter((x) => x.id !== id))} />
+            ));
+          })()}
         </>
       )}
 
@@ -1766,7 +1816,7 @@ function Dashboard({ onSignOut }) {
 
           {tab === "violations" && (violations.length === 0 ? <Empty text="No violations tracked yet." /> :
             [...violations].sort((a, b) => (a.status === "resolved") - (b.status === "resolved") || a.cureDate.localeCompare(b.cureDate)).map((v) => (
-              <ViolationCard key={v.id} v={v} contractors={contractors} buildings={buildings}
+              <ViolationCard key={v.id} v={v} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
                 onUpdate={(next) => violationsPersist(violations.map((x) => (x.id === next.id ? next : x)))}
                 onDelete={(id) => violationsPersist(violations.filter((x) => x.id !== id))} />
             )))}
@@ -1783,11 +1833,11 @@ function Dashboard({ onSignOut }) {
           {tab === "workorders" && (activeWorkOrders.length === 0 && completedWorkOrders.length === 0 ? <Empty text="No work orders yet." /> :
             <>
               {activeWorkOrders.length === 0 && workorders.length > 0 && <Empty text="No work orders match your search." />}
-              {activeWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings}
+              {activeWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
                 onUpdate={saveWorkOrder}
                 onDelete={deleteWorkOrder} />)}
               <CollapsibleSection label="Completed work orders" count={completedWorkOrders.length}>
-                {completedWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings}
+                {completedWorkOrders.map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
                   onUpdate={saveWorkOrder}
                   onDelete={deleteWorkOrder} />)}
               </CollapsibleSection>
