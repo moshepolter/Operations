@@ -1210,7 +1210,12 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
             {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
           </div>
           <div className="text-sm mt-1" style={{ color: C.ink }}>{w.issue}</div>
-          <div className="text-sm mt-1" style={{ color: C.muted }}>{contractor ? `Assigned: ${contractor.name}` : "Unassigned"} · Open {days}d{w.status === "resolved" ? " (resolved)" : ""}</div>
+          <div className="text-sm mt-1" style={{ color: C.muted }}>
+            {tasks.length > 0
+              ? `${tasks.filter((t) => t.contractorId).length}/${tasks.length} vendors assigned`
+              : (contractor ? `Assigned: ${contractor.name}` : "Unassigned")}
+            {" "}· Open {days}d{w.status === "resolved" ? " (resolved)" : ""}
+          </div>
         </div>
         {open ? <ChevronUp size={16} color={C.muted} /> : <ChevronDown size={16} color={C.muted} />}
       </div>
@@ -1237,7 +1242,7 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
           )}
           <TaskManager tasks={w.tasks} contractors={contractors} buildingName={building?.name || ""} aptNumber={apartment?.number || ""} tenant={apartment} issueText={w.issue}
             onCreateContractor={onCreateContractor}
-            onChange={(tasks) => onUpdate({ ...w, tasks })} />
+            onChange={(tasks) => onUpdate({ ...w, tasks, status: (tasks.length > 0 && w.status === "open") ? "in-progress" : w.status })} />
           <div className="flex flex-wrap gap-2 mt-3">
             {w.status !== "resolved" && <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...w, status: "resolved", dateResolved: todayISO(), tasks: tasks.map((t) => (t.status === "completed" ? t : { ...t, status: "completed", completedDate: todayISO() })) })}>Mark resolved</Btn>}
             {tasks.length === 0 && (
