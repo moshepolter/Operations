@@ -1,9 +1,15 @@
-// Deliberately does no caching — this app needs live data from Firestore
-// anyway, so there's no real offline mode to build. It exists only because
-// some browsers require a service worker to be present before they'll
-// offer "Add to Home Screen" / "Install app".
+// Disabled — this service worker was causing the app to get stuck on a
+// broken cached version. It now immediately unregisters itself and clears
+// its cache the moment it runs, then gets out of the way for good.
 self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
-self.addEventListener("fetch", (event) => {
-  event.respondWith(fetch(event.request));
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+      await self.registration.unregister();
+      const clientsList = await self.clients.matchAll({ type: "window" });
+      clientsList.forEach((client) => client.navigate(client.url));
+    })()
+  );
 });
