@@ -103,7 +103,17 @@ function LoginScreen() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (err) {
-      setError("Incorrect email or password.");
+      console.error("Sign-in failed:", err.code, err.message);
+      // Only show the generic "wrong credentials" message for that specific
+      // case — anything else (network issue, rate limiting, etc.) shows the
+      // real reason instead of masking it, so this is easier to debug.
+      if (err.code === "auth/wrong-password" || err.code === "auth/user-not-found" || err.code === "auth/invalid-credential") {
+        setError("Incorrect email or password.");
+      } else if (err.code === "auth/too-many-requests") {
+        setError("Too many attempts — wait a few minutes and try again.");
+      } else {
+        setError(`Sign-in error: ${err.code || err.message}`);
+      }
     }
     setBusy(false);
   };
