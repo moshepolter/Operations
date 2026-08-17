@@ -49,6 +49,12 @@ function fmtDate(d) {
   if (isNaN(dt)) return d;
   return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
+function fmtShortDate(d) {
+  if (!d) return "—";
+  const dt = new Date(d + "T00:00:00");
+  if (isNaN(dt)) return d;
+  return dt.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
+}
 function daysBetween(a, b) {
   const A = new Date(a + "T00:00:00");
   const B = new Date(b + "T00:00:00");
@@ -1031,6 +1037,94 @@ function PrintButton({ title, openItems, closedItems, closedLabel, columns }) {
   );
 }
 
+// Prints 911s as a written report (title, then its updates underneath) —
+// not a table, since these read more like a running log than a data grid.
+function printEmergencies(items, buildings) {
+  const win = window.open("", "_blank");
+  if (!win) { alert("Please allow pop-ups to print."); return; }
+  const styles = `
+    body { font-family: Georgia, 'Times New Roman', serif; padding: 32px; color: #1B2430; max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 20px; margin-bottom: 4px; font-family: Arial, sans-serif; }
+    .meta { color: #8A8371; font-size: 12px; margin-bottom: 24px; font-family: Arial, sans-serif; }
+    .case { margin-bottom: 22px; page-break-inside: avoid; }
+    .case-title { font-size: 16px; font-weight: bold; margin-bottom: 2px; font-family: Arial, sans-serif; }
+    .case-meta { font-size: 12px; color: #8A8371; margin-bottom: 8px; font-family: Arial, sans-serif; }
+    .update { margin-bottom: 4px; font-size: 14px; line-height: 1.5; }
+    .update-date { font-weight: bold; font-family: Arial, sans-serif; }
+    hr { border: none; border-top: 1px solid #DCD5C6; margin: 18px 0; }
+    @media print { body { padding: 10px; } }
+  `;
+  const casesHtml = items.map((item) => {
+    const building = lookupBuilding(buildings, item.buildingId);
+    const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
+    const ordered = [...(item.updates || [])].reverse();
+    const updatesHtml = ordered.length
+      ? ordered.map((u) => `<div class="update"><span class="update-date">${escapeHtml(fmtShortDate(u.date))}</span> — ${escapeHtml(u.text)}</div>`).join("")
+      : `<div class="update" style="font-style:italic;color:#8A8371;">No updates yet.</div>`;
+    return `<div class="case">
+      <div class="case-title">${escapeHtml(item.title)}${item.status === "resolved" ? " (Resolved)" : ""}</div>
+      <div class="case-meta">${escapeHtml(building?.name || "No building")}${apartment ? " · Apt " + escapeHtml(apartment.number) : ""} · Opened ${escapeHtml(fmtDate(item.createdDate))}</div>
+      ${updatesHtml}
+    </div><hr/>`;
+  }).join("");
+  win.document.write(`<html><head><title>911 Report</title><style>${styles}</style></head><body>
+    <h1>911 Report</h1>
+    <div class="meta">Printed ${escapeHtml(new Date().toLocaleString())} — ${items.length} case${items.length === 1 ? "" : "s"}</div>
+    ${casesHtml}
+  </body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 300);
+}
+
+function EmergencyPrintButton({ openItems, closedItems, buildings }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const go = (which) => {
+    setMenuOpen(false);
+    if (which === "open") printEmergencies(openItems, buildings);
+    else if (which === "closed") printEmergencies(closedItems, buildings);
+    else printEmergencies([...openItems, ...closedItems], buildings);
+  };
+  return (
+    <div className="relative inline-block">
+      <Btn size="sm" tone="ghost" icon={Printer} onClick={() => setMenuOpen(!menuOpen)}>Print</Btn>
+      {menuOpen && (
+        <div className="absolute z-20 mt-1 rounded-md border overflow-hidden" style={{ backgroundColor: C.card, borderColor: C.hair, minWidth: 170 }}
+          onMouseLeave={() => setMenuOpen(false)}>
+          <button onClick={() => go("open")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Active only</button>
+          <button onClick={() => go("closed")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Resolved only</button>
+          <button onClick={() => go("both")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Both</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InvoicePrintButton({ activeItems, paidItems, declinedItems, columns }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const go = (which) => {
+    setMenuOpen(false);
+    if (which === "open") printRecords("Open Invoices", activeItems, columns);
+    else if (which === "paid") printRecords("Paid Invoices", paidItems, columns);
+    else if (which === "declined") printRecords("Declined Invoices", declinedItems, columns);
+    else printRecords("All Invoices", [...activeItems, ...paidItems, ...declinedItems], columns);
+  };
+  return (
+    <div className="relative inline-block">
+      <Btn size="sm" tone="ghost" icon={Printer} onClick={() => setMenuOpen(!menuOpen)}>Print</Btn>
+      {menuOpen && (
+        <div className="absolute z-20 mt-1 rounded-md border overflow-hidden" style={{ backgroundColor: C.card, borderColor: C.hair, minWidth: 170 }}
+          onMouseLeave={() => setMenuOpen(false)}>
+          <button onClick={() => go("open")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Open only</button>
+          <button onClick={() => go("paid")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Paid only</button>
+          <button onClick={() => go("declined")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>Declined only</button>
+          <button onClick={() => go("all")} className="block w-full text-left px-3 py-2 text-sm hover:opacity-75" style={{ color: C.ink }}>All</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- INVOICES ---------------- */
 
 function MessageThread({ messages, onSend, sendAs, placeholder }) {
@@ -1529,25 +1623,21 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
     w.status === "in-progress" ? <Stamp tone="amber">In progress</Stamp> : <Stamp tone="slate">Open</Stamp>;
 
   return (
-    <div className="rounded-md border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-      <div className="pl-3 pr-2 py-1.5 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(!open)}>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] font-semibold px-1 rounded shrink-0" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
-            <span className="font-semibold text-sm truncate" style={{ color: C.ink }}>{building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
-            {stamp}
-            {w.notBilling && <Stamp tone="slate">Not billing</Stamp>}
-            {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
-          </div>
-          <div className="text-xs mt-0.5 truncate" style={{ color: C.muted }}>
-            {apartment?.tenantName || "No tenant"} · {w.issue}
-            {" "}· {tasks.length > 0
+    <div className="rounded border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+      <div className="pl-2 pr-1.5 py-0.5 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(!open)}>
+        <div className="min-w-0 flex-1 flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] font-semibold px-1 rounded shrink-0" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
+          <span className="font-semibold text-xs truncate" style={{ color: C.ink }}>{building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
+          <span className="text-xs truncate" style={{ color: C.muted }}>
+            {apartment?.tenantName || "No tenant"} · {w.issue} · {tasks.length > 0
               ? `${tasks.filter((t) => t.contractorId).length}/${tasks.length} vendors`
-              : (contractor ? contractor.name : "Unassigned")}
-            {" "}· {days}d{w.status === "resolved" ? " (resolved)" : ""}
-          </div>
+              : (contractor ? contractor.name : "Unassigned")} · {days}d{w.status === "resolved" ? " (resolved)" : ""}
+          </span>
+          {stamp}
+          {w.notBilling && <Stamp tone="slate">Not billing</Stamp>}
+          {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
         </div>
-        {open ? <ChevronUp size={15} className="shrink-0" color={C.muted} /> : <ChevronDown size={15} className="shrink-0" color={C.muted} />}
+        {open ? <ChevronUp size={13} className="shrink-0" color={C.muted} /> : <ChevronDown size={13} className="shrink-0" color={C.muted} />}
       </div>
       {open && (
         <div className="px-3 pb-3">
@@ -1616,11 +1706,37 @@ function EmergencyForm({ buildings, onSave, onCancel }) {
   );
 }
 
+function UpdateLog({ updates, onAdd }) {
+  const [text, setText] = useState("");
+  const ordered = [...updates].reverse(); // newest first, like a log
+  return (
+    <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+      <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Updates</div>
+      <div className="mb-3 max-h-72 overflow-y-auto" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>
+        {ordered.length === 0 && <div className="text-sm italic" style={{ color: C.muted, fontFamily: "'IBM Plex Sans', sans-serif" }}>No updates yet.</div>}
+        {ordered.map((n, i) => (
+          <div key={i} className="text-sm leading-relaxed py-1">
+            <span className="font-bold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtShortDate(n.date)}</span>
+            <span style={{ color: C.ink }}> — {n.text}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Add an update..."
+          className={inputCls} style={inputStyle()}
+          onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onAdd(text.trim()); setText(""); } }} />
+        <Btn size="sm" onClick={() => { if (text.trim()) { onAdd(text.trim()); setText(""); } }}>Add</Btn>
+      </div>
+    </div>
+  );
+}
+
 function EmergencyCard({ item, buildings, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
   const building = lookupBuilding(buildings, item.buildingId);
   const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
   const updates = item.updates || [];
+  const lastUpdateDate = updates.length ? updates[updates.length - 1].date : item.createdDate;
   const stamp = item.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> : <Stamp tone="red">Active</Stamp>;
 
   return (
@@ -1631,21 +1747,22 @@ function EmergencyCard({ item, buildings, onUpdate, onDelete }) {
             <span className="font-semibold text-sm truncate" style={{ color: C.ink }}>{item.title}</span>
             {stamp}
           </div>
-          <div className="text-xs mt-0.5 truncate" style={{ color: C.muted }}>
-            {building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""} · Opened {fmtDate(item.createdDate)} · {updates.length} update{updates.length === 1 ? "" : "s"}
-          </div>
+          <div className="text-xs mt-0.5" style={{ color: C.muted }}>Last updated {fmtShortDate(lastUpdateDate)}</div>
         </div>
         {open ? <ChevronUp size={15} className="shrink-0" color={C.muted} /> : <ChevronDown size={15} className="shrink-0" color={C.muted} />}
       </div>
       {open && (
         <div className="px-3 pb-3">
+          {(building || apartment) && (
+            <div className="text-xs mb-2" style={{ color: C.muted }}>{building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""} · Opened {fmtDate(item.createdDate)}</div>
+          )}
           <div className="flex flex-wrap gap-2 mb-1">
             {item.status !== "resolved"
               ? <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...item, status: "resolved" })}>Mark resolved</Btn>
               : <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...item, status: "open" })}>Reopen</Btn>}
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(item.id)}>Remove</Btn>
           </div>
-          <NotesLog notes={updates} label="Updates" placeholder="Add an update..."
+          <UpdateLog updates={updates}
             onAdd={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO() }] })} />
           <FileAttach files={item.files}
             onAdd={(f) => onUpdate({ ...item, files: [...(item.files || []), f] })}
@@ -2127,6 +2244,7 @@ function Dashboard({ onSignOut }) {
   const [jumpToDeclined, setJumpToDeclined] = useState(false);
   const [invoiceSearch, setInvoiceSearch] = useState("");
   const [workOrderSearch, setWorkOrderSearch] = useState("");
+  const [emergencySearch, setEmergencySearch] = useState("");
   const invoiceCardRefs = useRef({});
 
   const [invoices, saveInvoice, deleteInvoice, invReady] = useCollectionSynced("invoices", authReady);
@@ -2137,8 +2255,15 @@ function Dashboard({ onSignOut }) {
   const [buildings, buildingsPersist, bldReady] = useSynced("buildings", authReady, []);
 
   const loading = !authReady || !invReady || !vioReady || !wkReady || !emReady || !conReady || !bldReady;
-  const activeEmergencies = emergencies.filter((e) => e.status !== "resolved");
-  const resolvedEmergencies = emergencies.filter((e) => e.status === "resolved");
+  const emQuery = emergencySearch.trim().toLowerCase();
+  const emergencySearchText = (item) => {
+    const building = lookupBuilding(buildings, item.buildingId);
+    const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
+    const updatesText = (item.updates || []).map((u) => u.text).join(" ");
+    return [item.title, building?.name, apartment?.number, updatesText].filter(Boolean).join(" ").toLowerCase();
+  };
+  const activeEmergencies = emergencies.filter((e) => e.status !== "resolved" && (!emQuery || emergencySearchText(e).includes(emQuery)));
+  const resolvedEmergencies = emergencies.filter((e) => e.status === "resolved" && (!emQuery || emergencySearchText(e).includes(emQuery)));
 
   // One-time backfill: invoices created before vendor/building names were
   // snapshotted onto them get filled in now, so your boss's view (which can
@@ -2310,7 +2435,7 @@ function Dashboard({ onSignOut }) {
                 </select>
               </div>
               <div className="flex gap-2">
-                <PrintButton title="Invoices" openItems={activeInvoices} closedItems={paidInvoices} closedLabel="Paid" columns={invoiceColumns(contractors, buildings)} />
+                <InvoicePrintButton activeItems={activeInvoices} paidItems={paidInvoices} declinedItems={declinedInvoices} columns={invoiceColumns(contractors, buildings)} />
               </div>
             </>
           )}
@@ -2374,7 +2499,16 @@ function Dashboard({ onSignOut }) {
             </>
           )}
 
-          {tab === "emergencies" && (activeEmergencies.length === 0 && resolvedEmergencies.length === 0 ? <Empty text="No 911s right now." /> :
+          {tab === "emergencies" && emergencies.length > 0 && (
+            <>
+              <SearchBar value={emergencySearch} onChange={setEmergencySearch} placeholder="Search by title, building, or anything in the updates..." />
+              <div className="flex gap-2">
+                <EmergencyPrintButton openItems={activeEmergencies} closedItems={resolvedEmergencies} buildings={buildings} />
+              </div>
+            </>
+          )}
+
+          {tab === "emergencies" && (activeEmergencies.length === 0 && resolvedEmergencies.length === 0 ? <Empty text={emergencies.length === 0 ? "No 911s right now." : "No 911s match your search."} /> :
             <>
               {sortByBuilding(activeEmergencies, buildings).map((item) => (
                 <EmergencyCard key={item.id} item={item} buildings={buildings} onUpdate={saveEmergency} onDelete={deleteEmergency} />
