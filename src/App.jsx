@@ -140,15 +140,17 @@ function LoginScreen() {
 }
 
 /* ---------------- QUICK UNLOCK: PIN + FACE ID ---------------- */
-// This is a LOCAL convenience lock layered on top of the real Firebase
-// login above — it never replaces it. Your email/password is still what
-// actually protects your data; this just avoids retyping it every time you
-// open the app on your own phone. The PIN is stored (as a one-way hash,
-// never the PIN itself) only in this browser/device's local storage — it's
-// never sent anywhere. Face ID/Touch ID use the device's own built-in
-// WebAuthn support; nothing biometric ever leaves the phone.
+// This is a convenience lock layered on top of the real Firebase login
+// above — it never replaces it. Your email/password is still what actually
+// protects your data; this just avoids retyping it every time.
+//
+// The PIN itself is stored centrally in Firestore (as a one-way hash, never
+// the PIN itself), so the SAME PIN works on any browser or device once
+// you're logged in there — not something you set up separately per device.
+// Face ID/Touch ID can't work that way — it's physically tied to one
+// device's sensor — so that part is still set up separately on each device
+// you want to use it on, with the shared PIN as the fallback everywhere.
 
-const PIN_HASH_KEY = "abeco_pin_hash";
 const WEBAUTHN_ID_KEY = "abeco_webauthn_id";
 
 async function hashPin(pin) {
@@ -157,7 +159,22 @@ async function hashPin(pin) {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function hasPinSet() { return !!localStorage.getItem(PIN_HASH_KEY); }
+async function getAdminPinHash() {
+  try {
+    const snap = await getDoc(doc(db, "settings", "adminPin"));
+    return snap.exists() ? snap.data().hash : null;
+  } catch (e) {
+    console.error("Failed to read admin PIN:", e);
+    return null;
+  }
+}
+async function setAdminPinHash(hash) {
+  await setDoc(doc(db, "settings", "adminPin"), { hash });
+}
+async function clearAdminPinHash() {
+  await deleteDoc(doc(db, "settings", "adminPin"));
+}
+
 function hasFaceIdSet() { return !!localStorage.getItem(WEBAUTHN_ID_KEY); }
 function faceIdSupported() { return typeof window !== "undefined" && !!window.PublicKeyCredential; }
 
@@ -194,7 +211,7 @@ async function verifyFaceId() {
   }
 }
 
-function LockScreen({ onUnlock }) {
+function LockScreen({ pinHash, onUnlock }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
@@ -211,7 +228,7 @@ function LockScreen({ onUnlock }) {
   const submitPin = async (e) => {
     e.preventDefault();
     const hash = await hashPin(pin);
-    if (hash === localStorage.getItem(PIN_HASH_KEY)) {
+    if (hash === pinHash) {
       onUnlock();
     } else {
       setError("Wrong PIN.");
@@ -237,26 +254,30 @@ function LockScreen({ onUnlock }) {
   );
 }
 
-function QuickUnlockSetup({ onClose }) {
+function QuickUnlockSetup({ onClose, onChanged }) {
   const [step, setStep] = useState("menu");
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [error, setError] = useState("");
-  const [pinSet, setPinSet] = useState(hasPinSet());
+  const [pinSet, setPinSet] = useState(null); // null = checking
   const [faceIdSet, setFaceIdSet] = useState(hasFaceIdSet());
+
+  useEffect(() => { getAdminPinHash().then((h) => setPinSet(!!h)); }, []);
 
   const savePin = async (e) => {
     e.preventDefault();
     if (pin.length < 4) { setError("PIN needs to be at least 4 digits."); return; }
     if (pin !== confirmPin) { setError("PINs don't match — try again."); return; }
-    localStorage.setItem(PIN_HASH_KEY, await hashPin(pin));
+    await setAdminPinHash(await hashPin(pin));
     setPinSet(true); setPin(""); setConfirmPin(""); setError(""); setStep("menu");
+    if (onChanged) onChanged();
   };
 
-  const removePin = () => {
-    localStorage.removeItem(PIN_HASH_KEY);
+  const removePin = async () => {
+    await clearAdminPinHash();
     localStorage.removeItem(WEBAUTHN_ID_KEY);
     setPinSet(false); setFaceIdSet(false);
+    if (onChanged) onChanged();
   };
 
   const setupFaceId = async () => {
@@ -280,10 +301,12 @@ function QuickUnlockSetup({ onClose }) {
         {step === "menu" && (
           <div className="flex flex-col gap-2">
             <div className="text-sm" style={{ color: C.muted }}>
-              {pinSet ? "A PIN is set on this device." : "No PIN set yet — set one so you can skip retyping your password."}
+              {pinSet === null ? "Checking..." : pinSet
+                ? "A PIN is set — it works on any browser or device you log into, not just this one."
+                : "No PIN set yet — set one so you can skip retyping your password."}
             </div>
             <Btn onClick={() => setStep("pin")}>{pinSet ? "Change PIN" : "Set a PIN"}</Btn>
-            {pinSet && !faceIdSet && faceIdSupported() && <Btn tone="ghost" onClick={setupFaceId}>Enable Face ID / Touch ID</Btn>}
+            {pinSet && !faceIdSet && faceIdSupported() && <Btn tone="ghost" onClick={setupFaceId}>Enable Face ID / Touch ID on this device</Btn>}
             {faceIdSet && <div className="text-sm" style={{ color: C.green }}>Face ID is enabled on this device.</div>}
             {pinSet && <Btn tone="ghost" onClick={removePin}>Turn off Quick Unlock</Btn>}
             {error && <div className="text-sm" style={{ color: C.red }}>{error}</div>}
@@ -2248,14 +2271,23 @@ function useLockOnBackground(active, onLock) {
 function MainApp() {
   const { user, checked } = useRealAuth();
   const [unlocked, setUnlocked] = useState(false);
+  const [pinHash, setPinHash] = useState(undefined); // undefined = still checking, null = none set
 
-  useLockOnBackground(!!user && hasPinSet(), () => setUnlocked(false));
+  useLockOnBackground(!!user && !!pinHash, () => setUnlocked(false));
+
+  useEffect(() => {
+    if (!user) return;
+    getAdminPinHash().then(setPinHash);
+  }, [user]);
 
   if (!checked) {
     return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
   }
   if (!user) return <LoginScreen />;
-  if (hasPinSet() && !unlocked) return <LockScreen onUnlock={() => setUnlocked(true)} />;
+  if (pinHash === undefined) {
+    return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
+  }
+  if (pinHash && !unlocked) return <LockScreen pinHash={pinHash} onUnlock={() => setUnlocked(true)} />;
   return <Dashboard onSignOut={() => signOut(auth)} />;
 }
 
