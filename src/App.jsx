@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, Check, HelpCircle, AlertTriangle, MessageCircle,
   Trash2, ChevronDown, ChevronUp, Copy, FileText, Wrench, ShieldAlert,
-  CheckCircle2, Loader2, Building2, Users, User, Camera, Pencil, Printer
+  CheckCircle2, Loader2, Building2, Users, User, Camera, Pencil, Printer, Download
 } from "lucide-react";
 import { doc, collection, onSnapshot, setDoc, getDoc, deleteDoc, runTransaction } from "firebase/firestore";
 import { signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
@@ -471,6 +471,10 @@ async function getNextNumber(field) {
 }
 const getNextInvoiceNumber = () => getNextNumber("invoiceNumber");
 const getNextWorkOrderNumber = () => getNextNumber("workOrderNumber");
+const getNextEmergencyNumber = () => getNextNumber("emergencyNumber");
+async function resetEmergencyNumbering() {
+  await setDoc(doc(db, "board", "counters"), { emergencyNumber: 0 }, { merge: true });
+}
 
 function Stamp({ children, tone }) {
   const tones = {
@@ -583,6 +587,26 @@ function PhotoLightbox({ src, onClose }) {
   );
 }
 
+function PdfLightbox({ src, name, onClose }) {
+  if (!src) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col p-3" style={{ backgroundColor: "rgba(0,0,0,0.85)" }}>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <span className="text-sm truncate" style={{ color: "#fff" }}>{name}</span>
+        <div className="flex items-center gap-2 shrink-0">
+          <a href={src} download={name} className="w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
+            <Download size={18} />
+          </a>
+          <button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
+            <X size={20} />
+          </button>
+        </div>
+      </div>
+      <iframe src={src} title={name} className="flex-1 w-full rounded-lg" style={{ border: "none", backgroundColor: "#fff" }} />
+    </div>
+  );
+}
+
 function PhotoAttach({ photos, onAdd, onRemove }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -643,6 +667,7 @@ function readFileAsDataUrl(file) {
 function FileAttach({ files, onAdd, onRemove }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [pdfPreview, setPdfPreview] = useState(null);
   const inputRef = useRef(null);
   const list = files || [];
 
@@ -676,7 +701,7 @@ function FileAttach({ files, onAdd, onRemove }) {
           ) : (
             <div key={f.id} className="relative flex items-center gap-1.5 pl-2 pr-6 py-2 rounded-md border max-w-[180px]" style={{ borderColor: C.hair, backgroundColor: C.paperDark }}>
               <FileText size={14} color={C.slate} className="shrink-0" />
-              <a href={f.dataUrl} download={f.name} className="text-xs underline truncate" style={{ color: C.ink }}>{f.name}</a>
+              <button onClick={() => setPdfPreview(f)} className="text-xs underline truncate text-left" style={{ color: C.ink }}>{f.name}</button>
               <button onClick={() => onRemove(f.id)} className="absolute top-1 right-1" style={{ color: C.red }}><X size={12} /></button>
             </div>
           ))}
@@ -688,6 +713,7 @@ function FileAttach({ files, onAdd, onRemove }) {
         {busy ? "Processing..." : "Add photo or PDF"}
       </Btn>
       <PhotoLightbox src={preview} onClose={() => setPreview(null)} />
+      <PdfLightbox src={pdfPreview?.dataUrl} name={pdfPreview?.name} onClose={() => setPdfPreview(null)} />
     </div>
   );
 }
@@ -1737,13 +1763,14 @@ function EmergencyCard({ item, buildings, onUpdate, onDelete }) {
   const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
   const updates = item.updates || [];
   const lastUpdateDate = updates.length ? updates[updates.length - 1].date : item.createdDate;
-  const stamp = item.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> : <Stamp tone="red">Active</Stamp>;
+  const stamp = item.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> : null;
 
   return (
     <div className="rounded-md border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
       <div className="pl-3 pr-2 py-1.5 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(!open)}>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] font-semibold px-1 rounded shrink-0" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{item.number ?? "—"}</span>
             <span className="font-semibold text-sm truncate" style={{ color: C.ink }}>{item.title}</span>
             {stamp}
           </div>
@@ -1765,7 +1792,11 @@ function EmergencyCard({ item, buildings, onUpdate, onDelete }) {
           <UpdateLog updates={updates}
             onAdd={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO() }] })} />
           <FileAttach files={item.files}
-            onAdd={(f) => onUpdate({ ...item, files: [...(item.files || []), f] })}
+            onAdd={(f) => onUpdate({
+              ...item,
+              files: [...(item.files || []), f],
+              updates: [...updates, { text: `${f.kind === "image" ? "Added photo" : "Added PDF"}: ${f.name}`, date: todayISO() }],
+            })}
             onRemove={(id) => onUpdate({ ...item, files: (item.files || []).filter((f) => f.id !== id) })} />
         </div>
       )}
@@ -2297,9 +2328,9 @@ function Dashboard({ onSignOut }) {
   const completedWorkOrders = workorders.filter((w) => w.status === "resolved" && (!woQuery || workOrderSearchText(w, contractors, buildings).includes(woQuery)));
 
   const tabs = [
-    { id: "workorders", label: "Work Orders", icon: Wrench, count: openWorkOrders },
+    { id: "workorders", label: "Work Orders", icon: Wrench, count: 0 },
     { id: "violations", label: "HPD Violations", icon: ShieldAlert, count: dueViolations.length },
-    { id: "emergencies", label: "911", icon: AlertTriangle, count: activeEmergencies.length },
+    { id: "emergencies", label: "911", icon: AlertTriangle, count: 0 },
     { id: "invoices", label: "Invoices", icon: FileText, count: pendingInvoices },
     { id: "directory", label: "Directory", icon: Building2, count: 0 },
     { id: "vendors", label: "Vendors", icon: Users, count: 0 },
@@ -2410,7 +2441,11 @@ function Dashboard({ onSignOut }) {
           {showForm && tab === "emergencies" && (
             <EmergencyForm buildings={buildings}
               onCancel={() => setShowForm(false)}
-              onSave={(item) => { saveEmergency(item); setShowForm(false); }} />
+              onSave={async (item) => {
+                const number = await getNextEmergencyNumber();
+                saveEmergency({ ...item, number });
+                setShowForm(false);
+              }} />
           )}
 
           {tab === "invoices" && invoices.length > 0 && (
@@ -2504,6 +2539,11 @@ function Dashboard({ onSignOut }) {
               <SearchBar value={emergencySearch} onChange={setEmergencySearch} placeholder="Search by title, building, or anything in the updates..." />
               <div className="flex gap-2">
                 <EmergencyPrintButton openItems={activeEmergencies} closedItems={resolvedEmergencies} buildings={buildings} />
+                <Btn size="sm" tone="ghost" icon={Trash2} onClick={async () => {
+                  if (!window.confirm(`Delete all ${emergencies.length} 911(s) and reset numbering back to #1? This is meant for clearing out test data — it can't be undone.`)) return;
+                  for (const item of emergencies) await deleteEmergency(item.id);
+                  await resetEmergencyNumbering();
+                }}>Reset 911s (testing)</Btn>
               </div>
             </>
           )}
