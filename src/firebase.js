@@ -25,7 +25,7 @@
 
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
+import { getAuth } from "firebase/auth";
 
 const FIREBASE_CONFIG = {
   apiKey: "PASTE_YOUR_API_KEY_HERE",
@@ -39,8 +39,3 @@ const FIREBASE_CONFIG = {
 export const app = initializeApp(FIREBASE_CONFIG);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
-
-// Explicitly keeps you signed in across closing the tab/app, refreshing,
-// and reopening — this is Firebase's default anyway, but setting it
-// directly rules out any ambiguity about why a session might not persist.
-setPersistence(auth, browserLocalPersistence).catch((e) => console.error("Failed to set auth persistence:", e));
