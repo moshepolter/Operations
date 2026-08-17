@@ -587,14 +587,40 @@ function PhotoLightbox({ src, onClose }) {
   );
 }
 
+function dataUrlToBlobUrl(dataUrl) {
+  const [header, base64] = dataUrl.split(",");
+  const mimeMatch = header.match(/data:(.*);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : "application/pdf";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
+}
+
 function PdfLightbox({ src, name, onClose }) {
+  const [blobUrl, setBlobUrl] = useState(null);
+
+  useEffect(() => {
+    if (!src) { setBlobUrl(null); return undefined; }
+    let url;
+    try { url = dataUrlToBlobUrl(src); setBlobUrl(url); }
+    catch (e) { console.error("PDF preview failed:", e); setBlobUrl(null); }
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [src]);
+
   if (!src) return null;
   return (
     <div className="fixed inset-0 z-50 flex flex-col p-3" style={{ backgroundColor: "rgba(0,0,0,0.85)" }}>
       <div className="flex items-center justify-between mb-2 px-1">
         <span className="text-sm truncate" style={{ color: "#fff" }}>{name}</span>
         <div className="flex items-center gap-2 shrink-0">
-          <a href={src} download={name} className="w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
+          {blobUrl && (
+            <a href={blobUrl} target="_blank" rel="noopener noreferrer" title="Open in new tab"
+              className="text-xs px-2.5 py-1.5 rounded-full text-white" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
+              Open in new tab
+            </a>
+          )}
+          <a href={blobUrl || src} download={name} className="w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
             <Download size={18} />
           </a>
           <button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
@@ -602,7 +628,9 @@ function PdfLightbox({ src, name, onClose }) {
           </button>
         </div>
       </div>
-      <iframe src={src} title={name} className="flex-1 w-full rounded-lg" style={{ border: "none", backgroundColor: "#fff" }} />
+      {blobUrl
+        ? <iframe src={blobUrl} title={name} className="flex-1 w-full rounded-lg" style={{ border: "none", backgroundColor: "#fff" }} />
+        : <div className="flex-1 flex items-center justify-center text-sm" style={{ color: "#fff" }}>Preparing preview...</div>}
     </div>
   );
 }
@@ -1081,9 +1109,12 @@ function printEmergencies(items) {
     @media print { body { padding: 10px; } }
   `;
   const casesHtml = items.map((item) => {
-    const ordered = [...(item.updates || [])].reverse();
-    const updatesHtml = ordered.length
-      ? ordered.map((u) => `<div class="update"><span class="update-date">${escapeHtml(fmtShortDate(u.date))}</span> — ${escapeHtml(u.text)}</div>`).join("")
+    const combined = [
+      ...(item.updates || []).map((u) => ({ text: u.text, date: u.date })),
+      ...(item.files || []).map((f) => ({ text: `[${f.kind === "image" ? "Photo" : "PDF"}: ${f.name}]`, date: f.date })),
+    ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const updatesHtml = combined.length
+      ? combined.map((u) => `<div class="update"><span class="update-date">${escapeHtml(fmtShortDate(u.date))}</span> — ${escapeHtml(u.text)}</div>`).join("")
       : `<div class="update" style="font-style:italic;color:#8A8371;">No updates yet.</div>`;
     return `<div class="case">
       <div class="case-title">#${escapeHtml(item.number ?? "—")} — ${escapeHtml(item.title)}${item.status === "resolved" ? " (Resolved)" : ""}</div>
@@ -1723,27 +1754,81 @@ function EmergencyForm({ onSave, onCancel }) {
   );
 }
 
-function UpdateLog({ updates, onAdd }) {
+function EmergencyTimeline({ updates, files, onAddText, onAddFile, onRemoveFile }) {
   const [text, setText] = useState("");
-  const ordered = [...updates].reverse(); // newest first, like a log
+  const [busy, setBusy] = useState(false);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [pdfPreview, setPdfPreview] = useState(null);
+  const inputRef = useRef(null);
+
+  // Merge text updates and files into one chronological list so photos and
+  // PDFs show up right in the log where they were added, not in a separate
+  // section underneath.
+  const combined = [
+    ...(updates || []).map((u, i) => ({ kind: "text", ...u, _key: `u${i}` })),
+    ...(files || []).map((f) => ({ ...f, _key: f.id })),
+  ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const handleFiles = async (fileList) => {
+    setBusy(true);
+    for (const file of Array.from(fileList)) {
+      try {
+        const isImage = file.type.startsWith("image/");
+        const dataUrl = isImage ? await resizeImage(file) : await readFileAsDataUrl(file);
+        onAddFile({ id: uid(), dataUrl, name: file.name, kind: isImage ? "image" : "file", date: todayISO() });
+      } catch (e) { console.error("File upload failed:", e); }
+    }
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
   return (
     <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
       <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Updates</div>
-      <div className="mb-3 max-h-72 overflow-y-auto" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>
-        {ordered.length === 0 && <div className="text-sm italic" style={{ color: C.muted, fontFamily: "'IBM Plex Sans', sans-serif" }}>No updates yet.</div>}
-        {ordered.map((n, i) => (
-          <div key={i} className="text-sm leading-relaxed py-1">
-            <span className="font-bold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtShortDate(n.date)}</span>
-            <span style={{ color: C.ink }}> — {n.text}</span>
-          </div>
-        ))}
+      <div className="flex flex-col gap-2 mb-3 max-h-96 overflow-y-auto">
+        {combined.length === 0 && <div className="text-sm italic" style={{ color: C.muted }}>Nothing yet.</div>}
+        {combined.map((entry) => {
+          if (entry.kind === "text") {
+            return (
+              <div key={entry._key} className="text-sm leading-relaxed" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>
+                <span className="font-bold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtShortDate(entry.date)}</span>
+                <span style={{ color: C.ink }}> — {entry.text}</span>
+              </div>
+            );
+          }
+          return (
+            <div key={entry._key} className="flex items-center gap-2">
+              <span className="text-xs font-bold shrink-0" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtShortDate(entry.date)}</span>
+              {entry.kind === "image" ? (
+                <div className="relative">
+                  <img src={entry.dataUrl} alt={entry.name} className="w-16 h-16 object-cover rounded-md border cursor-pointer" style={{ borderColor: C.hair }}
+                    onClick={() => setImagePreview(entry.dataUrl)} />
+                  <button onClick={() => onRemoveFile(entry.id)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: C.red }}><X size={11} /></button>
+                </div>
+              ) : (
+                <div className="relative flex items-center gap-1.5 pl-2 pr-6 py-1.5 rounded-md border max-w-[200px]" style={{ borderColor: C.hair, backgroundColor: C.paperDark }}>
+                  <FileText size={14} color={C.slate} className="shrink-0" />
+                  <button onClick={() => setPdfPreview(entry)} className="text-xs underline truncate text-left" style={{ color: C.ink }}>{entry.name}</button>
+                  <button onClick={() => onRemoveFile(entry.id)} className="absolute top-1 right-1" style={{ color: C.red }}><X size={12} /></button>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Add an update..."
-          className={inputCls} style={inputStyle()}
-          onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onAdd(text.trim()); setText(""); } }} />
-        <Btn size="sm" onClick={() => { if (text.trim()) { onAdd(text.trim()); setText(""); } }}>Add</Btn>
+          className={inputCls} style={{ ...inputStyle(), minWidth: 160, flex: 1 }}
+          onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onAddText(text.trim()); setText(""); } }} />
+        <Btn size="sm" onClick={() => { if (text.trim()) { onAddText(text.trim()); setText(""); } }}>Add</Btn>
+        <input ref={inputRef} type="file" accept="image/*,application/pdf" multiple className="hidden"
+          onChange={(e) => e.target.files.length && handleFiles(e.target.files)} />
+        <Btn size="sm" tone="ghost" icon={Camera} disabled={busy} onClick={() => inputRef.current?.click()}>
+          {busy ? "Processing..." : "Add photo or PDF"}
+        </Btn>
       </div>
+      <PhotoLightbox src={imagePreview} onClose={() => setImagePreview(null)} />
+      <PdfLightbox src={pdfPreview?.dataUrl} name={pdfPreview?.name} onClose={() => setPdfPreview(null)} />
     </div>
   );
 }
@@ -1751,7 +1836,8 @@ function UpdateLog({ updates, onAdd }) {
 function EmergencyCard({ item, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
   const updates = item.updates || [];
-  const lastUpdateDate = updates.length ? updates[updates.length - 1].date : item.createdDate;
+  const files = item.files || [];
+  const lastEntryDate = [...updates, ...files].map((e) => e.date).sort().slice(-1)[0] || item.createdDate;
   const stamp = item.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> : null;
 
   return (
@@ -1763,7 +1849,7 @@ function EmergencyCard({ item, onUpdate, onDelete }) {
             <span className="font-semibold text-sm truncate" style={{ color: C.ink }}>{item.title}</span>
             {stamp}
           </div>
-          <div className="text-xs mt-0.5" style={{ color: C.muted }}>Last updated {fmtShortDate(lastUpdateDate)}</div>
+          <div className="text-xs mt-0.5" style={{ color: C.muted }}>Last updated {fmtShortDate(lastEntryDate)}</div>
         </div>
         {open ? <ChevronUp size={15} className="shrink-0" color={C.muted} /> : <ChevronDown size={15} className="shrink-0" color={C.muted} />}
       </div>
@@ -1776,15 +1862,10 @@ function EmergencyCard({ item, onUpdate, onDelete }) {
               : <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...item, status: "open" })}>Reopen</Btn>}
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(item.id)}>Remove</Btn>
           </div>
-          <UpdateLog updates={updates}
-            onAdd={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO() }] })} />
-          <FileAttach files={item.files}
-            onAdd={(f) => onUpdate({
-              ...item,
-              files: [...(item.files || []), f],
-              updates: [...updates, { text: `${f.kind === "image" ? "Added photo" : "Added PDF"}: ${f.name}`, date: todayISO() }],
-            })}
-            onRemove={(id) => onUpdate({ ...item, files: (item.files || []).filter((f) => f.id !== id) })} />
+          <EmergencyTimeline updates={updates} files={files}
+            onAddText={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO() }] })}
+            onAddFile={(f) => onUpdate({ ...item, files: [...files, f] })}
+            onRemoveFile={(id) => onUpdate({ ...item, files: files.filter((f) => f.id !== id) })} />
         </div>
       )}
     </div>
