@@ -2222,3 +2222,8 @@ export default function App() {
 
   return isBossRoute ? <BossPage /> : <MainApp />;
 }
+
+// Named export used by boss-main.jsx, the dedicated entry point for
+// boss.html — lets that page render BossPage directly without going
+// through the path-detection logic above (it's always the boss page there).
+export { BossPage };
