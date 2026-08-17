@@ -515,13 +515,13 @@ function Btn({ children, onClick, tone = "slate", size = "md", icon: Icon, disab
   );
 }
 
-function NotesLog({ notes, onAdd }) {
+function NotesLog({ notes, onAdd, label = "Notes", placeholder = "Add a note..." }) {
   const [text, setText] = useState("");
   return (
     <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
-      <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Notes</div>
+      <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>{label}</div>
       <div className="flex flex-col gap-1.5 mb-2 max-h-40 overflow-y-auto">
-        {notes.length === 0 && <div className="text-sm italic" style={{ color: C.muted }}>No notes yet.</div>}
+        {notes.length === 0 && <div className="text-sm italic" style={{ color: C.muted }}>Nothing yet.</div>}
         {notes.map((n, i) => (
           <div key={i} className="text-sm rounded px-2 py-1.5" style={{ backgroundColor: C.paperDark }}>
             <span style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }} className="text-[11px] mr-2">{fmtDate(n.date)}</span>
@@ -530,7 +530,7 @@ function NotesLog({ notes, onAdd }) {
         ))}
       </div>
       <div className="flex gap-2">
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Add a note..."
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder}
           className={inputCls} style={inputStyle()}
           onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onAdd(text.trim()); setText(""); } }} />
         <Btn size="sm" onClick={() => { if (text.trim()) { onAdd(text.trim()); setText(""); } }}>Add</Btn>
@@ -616,6 +616,70 @@ function PhotoAttach({ photos, onAdd, onRemove }) {
         onChange={(e) => e.target.files.length && handleFiles(e.target.files)} />
       <Btn size="sm" tone="ghost" icon={Camera} disabled={busy} onClick={() => inputRef.current?.click()}>
         {busy ? "Processing..." : "Add photo"}
+      </Btn>
+      <PhotoLightbox src={preview} onClose={() => setPreview(null)} />
+    </div>
+  );
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Like PhotoAttach, but also accepts PDFs — images get compressed and shown
+// as thumbnails, PDFs show as a filename you can download (no PDF
+// compression exists, so keep an eye on file size for very large PDFs).
+function FileAttach({ files, onAdd, onRemove }) {
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const inputRef = useRef(null);
+  const list = files || [];
+
+  const handleFiles = async (fileList) => {
+    setBusy(true);
+    for (const file of Array.from(fileList)) {
+      try {
+        const isImage = file.type.startsWith("image/");
+        const dataUrl = isImage ? await resizeImage(file) : await readFileAsDataUrl(file);
+        onAdd({ id: uid(), dataUrl, name: file.name, kind: isImage ? "image" : "file", date: todayISO() });
+      } catch (e) { console.error("File upload failed:", e); }
+    }
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hair }}>
+      <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: C.muted }}>Files</div>
+      {list.length > 0 && (
+        <div className="flex gap-2 flex-wrap mb-2">
+          {list.map((f) => f.kind === "image" ? (
+            <div key={f.id} className="relative">
+              <img src={f.dataUrl} alt={f.name} className="w-20 h-20 object-cover rounded-md border cursor-pointer" style={{ borderColor: C.hair }}
+                onClick={() => setPreview(f.dataUrl)} />
+              <button onClick={() => onRemove(f.id)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: C.red }}>
+                <X size={11} />
+              </button>
+            </div>
+          ) : (
+            <div key={f.id} className="relative flex items-center gap-1.5 pl-2 pr-6 py-2 rounded-md border max-w-[180px]" style={{ borderColor: C.hair, backgroundColor: C.paperDark }}>
+              <FileText size={14} color={C.slate} className="shrink-0" />
+              <a href={f.dataUrl} download={f.name} className="text-xs underline truncate" style={{ color: C.ink }}>{f.name}</a>
+              <button onClick={() => onRemove(f.id)} className="absolute top-1 right-1" style={{ color: C.red }}><X size={12} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept="image/*,application/pdf" multiple className="hidden"
+        onChange={(e) => e.target.files.length && handleFiles(e.target.files)} />
+      <Btn size="sm" tone="ghost" icon={Camera} disabled={busy} onClick={() => inputRef.current?.click()}>
+        {busy ? "Processing..." : "Add photo or PDF"}
       </Btn>
       <PhotoLightbox src={preview} onClose={() => setPreview(null)} />
     </div>
@@ -1465,26 +1529,25 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
     w.status === "in-progress" ? <Stamp tone="amber">In progress</Stamp> : <Stamp tone="slate">Open</Stamp>;
 
   return (
-    <div className="rounded-lg border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-      <div className="p-3 flex items-start justify-between gap-3 cursor-pointer" onClick={() => setOpen(!open)}>
-        <div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs font-semibold px-1.5 py-0.5 rounded" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
-            <span className="font-semibold" style={{ color: C.ink }}>{apartment?.tenantName || "No tenant on file"}</span>
-            <span className="text-sm" style={{ color: C.muted }}>{building?.name || ""}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
+    <div className="rounded-md border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+      <div className="pl-3 pr-2 py-1.5 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(!open)}>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] font-semibold px-1 rounded shrink-0" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
+            <span className="font-semibold text-sm truncate" style={{ color: C.ink }}>{building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
             {stamp}
             {w.notBilling && <Stamp tone="slate">Not billing</Stamp>}
             {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
           </div>
-          <div className="text-sm mt-1" style={{ color: C.ink }}>{w.issue}</div>
-          <div className="text-sm mt-1" style={{ color: C.muted }}>
-            {tasks.length > 0
-              ? `${tasks.filter((t) => t.contractorId).length}/${tasks.length} vendors assigned`
-              : (contractor ? `Assigned: ${contractor.name}` : "Unassigned")}
-            {" "}· Open {days}d{w.status === "resolved" ? " (resolved)" : ""}
+          <div className="text-xs mt-0.5 truncate" style={{ color: C.muted }}>
+            {apartment?.tenantName || "No tenant"} · {w.issue}
+            {" "}· {tasks.length > 0
+              ? `${tasks.filter((t) => t.contractorId).length}/${tasks.length} vendors`
+              : (contractor ? contractor.name : "Unassigned")}
+            {" "}· {days}d{w.status === "resolved" ? " (resolved)" : ""}
           </div>
         </div>
-        {open ? <ChevronUp size={16} color={C.muted} /> : <ChevronDown size={16} color={C.muted} />}
+        {open ? <ChevronUp size={15} className="shrink-0" color={C.muted} /> : <ChevronDown size={15} className="shrink-0" color={C.muted} />}
       </div>
       {open && (
         <div className="px-3 pb-3">
@@ -1519,6 +1582,74 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
             onAdd={(p) => onUpdate({ ...w, photos: [...(w.photos || []), p] })}
             onRemove={(id) => onUpdate({ ...w, photos: (w.photos || []).filter((p) => p.id !== id) })} />
           <NotesLog notes={w.notes || []} onAdd={(text) => onUpdate({ ...w, notes: [...(w.notes || []), { text, date: todayISO() }] })} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- 911 ---------------- */
+
+function EmergencyForm({ buildings, onSave, onCancel }) {
+  const [f, setF] = useState({ title: "", buildingId: "", apartmentId: "", note: "" });
+  const set = (k) => (e) => setF((prev) => ({ ...prev, [k]: e.target.value }));
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+      <div className="sm:col-span-2">
+        <Field label="Title"><input className={inputCls} style={inputStyle()} placeholder="e.g. Boiler failure — no heat" value={f.title} onChange={set("title")} /></Field>
+      </div>
+      <BuildingApartmentPicker buildings={buildings} buildingId={f.buildingId} apartmentId={f.apartmentId}
+        onChangeBuilding={(id) => setF((prev) => ({ ...prev, buildingId: id, apartmentId: "" }))}
+        onChangeApartment={(id) => setF((prev) => ({ ...prev, apartmentId: id }))} />
+      <div className="sm:col-span-2">
+        <Field label="What's happening"><textarea className={inputCls} style={inputStyle()} rows={2} value={f.note} onChange={set("note")} /></Field>
+      </div>
+      <div className="sm:col-span-2 flex gap-2 justify-end pt-1">
+        <Btn tone="ghost" onClick={onCancel}>Cancel</Btn>
+        <Btn icon={Plus} onClick={() => {
+          if (!f.title.trim()) return;
+          const updates = f.note.trim() ? [{ text: f.note.trim(), date: todayISO() }] : [];
+          onSave({ ...f, id: uid(), status: "open", createdDate: todayISO(), updates, files: [] });
+        }}>Add 911</Btn>
+      </div>
+    </div>
+  );
+}
+
+function EmergencyCard({ item, buildings, onUpdate, onDelete }) {
+  const [open, setOpen] = useState(false);
+  const building = lookupBuilding(buildings, item.buildingId);
+  const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
+  const updates = item.updates || [];
+  const stamp = item.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> : <Stamp tone="red">Active</Stamp>;
+
+  return (
+    <div className="rounded-md border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+      <div className="pl-3 pr-2 py-1.5 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(!open)}>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-semibold text-sm truncate" style={{ color: C.ink }}>{item.title}</span>
+            {stamp}
+          </div>
+          <div className="text-xs mt-0.5 truncate" style={{ color: C.muted }}>
+            {building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""} · Opened {fmtDate(item.createdDate)} · {updates.length} update{updates.length === 1 ? "" : "s"}
+          </div>
+        </div>
+        {open ? <ChevronUp size={15} className="shrink-0" color={C.muted} /> : <ChevronDown size={15} className="shrink-0" color={C.muted} />}
+      </div>
+      {open && (
+        <div className="px-3 pb-3">
+          <div className="flex flex-wrap gap-2 mb-1">
+            {item.status !== "resolved"
+              ? <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...item, status: "resolved" })}>Mark resolved</Btn>
+              : <Btn size="sm" tone="ghost" onClick={() => onUpdate({ ...item, status: "open" })}>Reopen</Btn>}
+            <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(item.id)}>Remove</Btn>
+          </div>
+          <NotesLog notes={updates} label="Updates" placeholder="Add an update..."
+            onAdd={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO() }] })} />
+          <FileAttach files={item.files}
+            onAdd={(f) => onUpdate({ ...item, files: [...(item.files || []), f] })}
+            onRemove={(id) => onUpdate({ ...item, files: (item.files || []).filter((f) => f.id !== id) })} />
         </div>
       )}
     </div>
@@ -2001,10 +2132,13 @@ function Dashboard({ onSignOut }) {
   const [invoices, saveInvoice, deleteInvoice, invReady] = useCollectionSynced("invoices", authReady);
   const [violations, violationsPersist, vioReady] = useSynced("violations", authReady, []);
   const [workorders, saveWorkOrder, deleteWorkOrder, wkReady] = useCollectionSynced("workorders", authReady);
+  const [emergencies, saveEmergency, deleteEmergency, emReady] = useCollectionSynced("emergencies", authReady);
   const [contractors, contractorsPersist, conReady] = useSynced("contractors", authReady, SEED_CONTRACTORS);
   const [buildings, buildingsPersist, bldReady] = useSynced("buildings", authReady, []);
 
-  const loading = !authReady || !invReady || !vioReady || !wkReady || !conReady || !bldReady;
+  const loading = !authReady || !invReady || !vioReady || !wkReady || !emReady || !conReady || !bldReady;
+  const activeEmergencies = emergencies.filter((e) => e.status !== "resolved");
+  const resolvedEmergencies = emergencies.filter((e) => e.status === "resolved");
 
   // One-time backfill: invoices created before vendor/building names were
   // snapshotted onto them get filled in now, so your boss's view (which can
@@ -2038,9 +2172,10 @@ function Dashboard({ onSignOut }) {
   const completedWorkOrders = workorders.filter((w) => w.status === "resolved" && (!woQuery || workOrderSearchText(w, contractors, buildings).includes(woQuery)));
 
   const tabs = [
-    { id: "invoices", label: "Invoices", icon: FileText, count: pendingInvoices },
-    { id: "violations", label: "HPD Violations", icon: ShieldAlert, count: dueViolations.length },
     { id: "workorders", label: "Work Orders", icon: Wrench, count: openWorkOrders },
+    { id: "violations", label: "HPD Violations", icon: ShieldAlert, count: dueViolations.length },
+    { id: "emergencies", label: "911", icon: AlertTriangle, count: activeEmergencies.length },
+    { id: "invoices", label: "Invoices", icon: FileText, count: pendingInvoices },
     { id: "directory", label: "Directory", icon: Building2, count: 0 },
     { id: "vendors", label: "Vendors", icon: Users, count: 0 },
   ];
@@ -2112,10 +2247,10 @@ function Dashboard({ onSignOut }) {
             </div>
           )}
 
-          {tab !== "directory" && (
+          {(tab === "invoices" || tab === "violations" || tab === "workorders" || tab === "emergencies") && (
             <div className="flex justify-end">
               <Btn icon={showForm ? X : Plus} onClick={() => setShowForm(!showForm)}>
-                {showForm ? "Close" : tab === "invoices" ? "New invoice" : tab === "violations" ? "New violation" : "New work order"}
+                {showForm ? "Close" : tab === "invoices" ? "New invoice" : tab === "violations" ? "New violation" : tab === "emergencies" ? "New 911" : "New work order"}
               </Btn>
             </div>
           )}
@@ -2146,6 +2281,11 @@ function Dashboard({ onSignOut }) {
                 await saveWorkOrder({ ...w, number });
                 setShowForm(false);
               }} />
+          )}
+          {showForm && tab === "emergencies" && (
+            <EmergencyForm buildings={buildings}
+              onCancel={() => setShowForm(false)}
+              onSave={(item) => { saveEmergency(item); setShowForm(false); }} />
           )}
 
           {tab === "invoices" && invoices.length > 0 && (
@@ -2230,6 +2370,19 @@ function Dashboard({ onSignOut }) {
                 {sortByBuilding(completedWorkOrders, buildings).map((w) => <WorkOrderCard key={w.id} w={w} contractors={contractors} buildings={buildings} onCreateContractor={addContractor}
                   onUpdate={saveWorkOrder}
                   onDelete={deleteWorkOrder} />)}
+              </CollapsibleSection>
+            </>
+          )}
+
+          {tab === "emergencies" && (activeEmergencies.length === 0 && resolvedEmergencies.length === 0 ? <Empty text="No 911s right now." /> :
+            <>
+              {sortByBuilding(activeEmergencies, buildings).map((item) => (
+                <EmergencyCard key={item.id} item={item} buildings={buildings} onUpdate={saveEmergency} onDelete={deleteEmergency} />
+              ))}
+              <CollapsibleSection label="Resolved 911s" count={resolvedEmergencies.length}>
+                {sortByBuilding(resolvedEmergencies, buildings).map((item) => (
+                  <EmergencyCard key={item.id} item={item} buildings={buildings} onUpdate={saveEmergency} onDelete={deleteEmergency} />
+                ))}
               </CollapsibleSection>
             </>
           )}
