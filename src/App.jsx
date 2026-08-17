@@ -1065,7 +1065,7 @@ function PrintButton({ title, openItems, closedItems, closedLabel, columns }) {
 
 // Prints 911s as a written report (title, then its updates underneath) —
 // not a table, since these read more like a running log than a data grid.
-function printEmergencies(items, buildings) {
+function printEmergencies(items) {
   const win = window.open("", "_blank");
   if (!win) { alert("Please allow pop-ups to print."); return; }
   const styles = `
@@ -1081,15 +1081,13 @@ function printEmergencies(items, buildings) {
     @media print { body { padding: 10px; } }
   `;
   const casesHtml = items.map((item) => {
-    const building = lookupBuilding(buildings, item.buildingId);
-    const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
     const ordered = [...(item.updates || [])].reverse();
     const updatesHtml = ordered.length
       ? ordered.map((u) => `<div class="update"><span class="update-date">${escapeHtml(fmtShortDate(u.date))}</span> — ${escapeHtml(u.text)}</div>`).join("")
       : `<div class="update" style="font-style:italic;color:#8A8371;">No updates yet.</div>`;
     return `<div class="case">
-      <div class="case-title">${escapeHtml(item.title)}${item.status === "resolved" ? " (Resolved)" : ""}</div>
-      <div class="case-meta">${escapeHtml(building?.name || "No building")}${apartment ? " · Apt " + escapeHtml(apartment.number) : ""} · Opened ${escapeHtml(fmtDate(item.createdDate))}</div>
+      <div class="case-title">#${escapeHtml(item.number ?? "—")} — ${escapeHtml(item.title)}${item.status === "resolved" ? " (Resolved)" : ""}</div>
+      <div class="case-meta">Opened ${escapeHtml(fmtDate(item.createdDate))}</div>
       ${updatesHtml}
     </div><hr/>`;
   }).join("");
@@ -1103,13 +1101,13 @@ function printEmergencies(items, buildings) {
   setTimeout(() => win.print(), 300);
 }
 
-function EmergencyPrintButton({ openItems, closedItems, buildings }) {
+function EmergencyPrintButton({ openItems, closedItems }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const go = (which) => {
     setMenuOpen(false);
-    if (which === "open") printEmergencies(openItems, buildings);
-    else if (which === "closed") printEmergencies(closedItems, buildings);
-    else printEmergencies([...openItems, ...closedItems], buildings);
+    if (which === "open") printEmergencies(openItems);
+    else if (which === "closed") printEmergencies(closedItems);
+    else printEmergencies([...openItems, ...closedItems]);
   };
   return (
     <div className="relative inline-block">
@@ -1706,26 +1704,19 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
 
 /* ---------------- 911 ---------------- */
 
-function EmergencyForm({ buildings, onSave, onCancel }) {
-  const [f, setF] = useState({ title: "", buildingId: "", apartmentId: "", note: "" });
+function EmergencyForm({ onSave, onCancel }) {
+  const [f, setF] = useState({ title: "", note: "" });
   const set = (k) => (e) => setF((prev) => ({ ...prev, [k]: e.target.value }));
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-      <div className="sm:col-span-2">
-        <Field label="Title"><input className={inputCls} style={inputStyle()} placeholder="e.g. Boiler failure — no heat" value={f.title} onChange={set("title")} /></Field>
-      </div>
-      <BuildingApartmentPicker buildings={buildings} buildingId={f.buildingId} apartmentId={f.apartmentId}
-        onChangeBuilding={(id) => setF((prev) => ({ ...prev, buildingId: id, apartmentId: "" }))}
-        onChangeApartment={(id) => setF((prev) => ({ ...prev, apartmentId: id }))} />
-      <div className="sm:col-span-2">
-        <Field label="What's happening"><textarea className={inputCls} style={inputStyle()} rows={2} value={f.note} onChange={set("note")} /></Field>
-      </div>
-      <div className="sm:col-span-2 flex gap-2 justify-end pt-1">
+    <div className="grid grid-cols-1 gap-3 p-4 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+      <Field label="Title"><input className={inputCls} style={inputStyle()} placeholder="e.g. Boiler failure — no heat" value={f.title} onChange={set("title")} /></Field>
+      <Field label="What's happening"><textarea className={inputCls} style={inputStyle()} rows={2} value={f.note} onChange={set("note")} /></Field>
+      <div className="flex gap-2 justify-end pt-1">
         <Btn tone="ghost" onClick={onCancel}>Cancel</Btn>
         <Btn icon={Plus} onClick={() => {
           if (!f.title.trim()) return;
           const updates = f.note.trim() ? [{ text: f.note.trim(), date: todayISO() }] : [];
-          onSave({ ...f, id: uid(), status: "open", createdDate: todayISO(), updates, files: [] });
+          onSave({ id: uid(), title: f.title.trim(), status: "open", createdDate: todayISO(), updates, files: [] });
         }}>Add 911</Btn>
       </div>
     </div>
@@ -1757,10 +1748,8 @@ function UpdateLog({ updates, onAdd }) {
   );
 }
 
-function EmergencyCard({ item, buildings, onUpdate, onDelete }) {
+function EmergencyCard({ item, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
-  const building = lookupBuilding(buildings, item.buildingId);
-  const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
   const updates = item.updates || [];
   const lastUpdateDate = updates.length ? updates[updates.length - 1].date : item.createdDate;
   const stamp = item.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> : null;
@@ -1780,9 +1769,7 @@ function EmergencyCard({ item, buildings, onUpdate, onDelete }) {
       </div>
       {open && (
         <div className="px-3 pb-3">
-          {(building || apartment) && (
-            <div className="text-xs mb-2" style={{ color: C.muted }}>{building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""} · Opened {fmtDate(item.createdDate)}</div>
-          )}
+          <div className="text-xs mb-2" style={{ color: C.muted }}>Opened {fmtDate(item.createdDate)}</div>
           <div className="flex flex-wrap gap-2 mb-1">
             {item.status !== "resolved"
               ? <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...item, status: "resolved" })}>Mark resolved</Btn>
@@ -2288,10 +2275,8 @@ function Dashboard({ onSignOut }) {
   const loading = !authReady || !invReady || !vioReady || !wkReady || !emReady || !conReady || !bldReady;
   const emQuery = emergencySearch.trim().toLowerCase();
   const emergencySearchText = (item) => {
-    const building = lookupBuilding(buildings, item.buildingId);
-    const apartment = lookupApartment(buildings, item.buildingId, item.apartmentId);
     const updatesText = (item.updates || []).map((u) => u.text).join(" ");
-    return [item.title, building?.name, apartment?.number, updatesText].filter(Boolean).join(" ").toLowerCase();
+    return [item.title, updatesText].filter(Boolean).join(" ").toLowerCase();
   };
   const activeEmergencies = emergencies.filter((e) => e.status !== "resolved" && (!emQuery || emergencySearchText(e).includes(emQuery)));
   const resolvedEmergencies = emergencies.filter((e) => e.status === "resolved" && (!emQuery || emergencySearchText(e).includes(emQuery)));
@@ -2439,7 +2424,7 @@ function Dashboard({ onSignOut }) {
               }} />
           )}
           {showForm && tab === "emergencies" && (
-            <EmergencyForm buildings={buildings}
+            <EmergencyForm
               onCancel={() => setShowForm(false)}
               onSave={async (item) => {
                 const number = await getNextEmergencyNumber();
@@ -2475,7 +2460,7 @@ function Dashboard({ onSignOut }) {
             </>
           )}
 
-          {tab === "invoices" && (activeInvoices.length === 0 && paidInvoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
+          {tab === "invoices" && (activeInvoices.length === 0 && paidInvoices.length === 0 && declinedInvoices.length === 0 ? <Empty text="No invoices yet. Add one to start approving." /> :
             <>
               {activeInvoices.length === 0 && invoices.length > 0 && (
                 <Empty text={invoiceSearch.trim() ? "No invoices match your search." : "No open invoices — check Paid invoices below."} />
@@ -2538,7 +2523,7 @@ function Dashboard({ onSignOut }) {
             <>
               <SearchBar value={emergencySearch} onChange={setEmergencySearch} placeholder="Search by title, building, or anything in the updates..." />
               <div className="flex gap-2">
-                <EmergencyPrintButton openItems={activeEmergencies} closedItems={resolvedEmergencies} buildings={buildings} />
+                <EmergencyPrintButton openItems={activeEmergencies} closedItems={resolvedEmergencies} />
                 <Btn size="sm" tone="ghost" icon={Trash2} onClick={async () => {
                   if (!window.confirm(`Delete all ${emergencies.length} 911(s) and reset numbering back to #1? This is meant for clearing out test data — it can't be undone.`)) return;
                   for (const item of emergencies) await deleteEmergency(item.id);
@@ -2550,12 +2535,12 @@ function Dashboard({ onSignOut }) {
 
           {tab === "emergencies" && (activeEmergencies.length === 0 && resolvedEmergencies.length === 0 ? <Empty text={emergencies.length === 0 ? "No 911s right now." : "No 911s match your search."} /> :
             <>
-              {sortByBuilding(activeEmergencies, buildings).map((item) => (
-                <EmergencyCard key={item.id} item={item} buildings={buildings} onUpdate={saveEmergency} onDelete={deleteEmergency} />
+              {[...activeEmergencies].sort((a, b) => (b.number ?? 0) - (a.number ?? 0)).map((item) => (
+                <EmergencyCard key={item.id} item={item} onUpdate={saveEmergency} onDelete={deleteEmergency} />
               ))}
               <CollapsibleSection label="Resolved 911s" count={resolvedEmergencies.length}>
-                {sortByBuilding(resolvedEmergencies, buildings).map((item) => (
-                  <EmergencyCard key={item.id} item={item} buildings={buildings} onUpdate={saveEmergency} onDelete={deleteEmergency} />
+                {[...resolvedEmergencies].sort((a, b) => (b.number ?? 0) - (a.number ?? 0)).map((item) => (
+                  <EmergencyCard key={item.id} item={item} onUpdate={saveEmergency} onDelete={deleteEmergency} />
                 ))}
               </CollapsibleSection>
             </>
