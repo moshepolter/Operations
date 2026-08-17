@@ -4,7 +4,7 @@ import {
   Trash2, ChevronDown, ChevronUp, Copy, FileText, Wrench, ShieldAlert,
   CheckCircle2, Loader2, Building2, Users, User, Camera, Pencil, Printer
 } from "lucide-react";
-import { doc, collection, onSnapshot, setDoc, deleteDoc, runTransaction } from "firebase/firestore";
+import { doc, collection, onSnapshot, setDoc, getDoc, deleteDoc, runTransaction } from "firebase/firestore";
 import { signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { db, auth } from "./firebase";
 
@@ -297,6 +297,54 @@ function QuickUnlockSetup({ onClose }) {
             </div>
           </form>
         )}
+      </div>
+    </div>
+  );
+}
+
+function BossPinSettings({ onClose }) {
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [hasExisting, setHasExisting] = useState(null); // null = checking
+
+  useEffect(() => { getBossPinHash().then((h) => setHasExisting(!!h)); }, []);
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (pin.length < 4) { setError("PIN needs to be at least 4 digits."); return; }
+    if (pin !== confirmPin) { setError("PINs don't match — try again."); return; }
+    await setBossPinHash(await hashPin(pin));
+    setSaved(true); setError(""); setHasExisting(true);
+    setPin(""); setConfirmPin("");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-5" style={{ backgroundColor: "rgba(0,0,0,0.5)" }}>
+      <div className="w-full max-w-sm p-5 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-bold" style={{ color: C.ink }}>Boss's PIN</h2>
+          <button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button>
+        </div>
+        <div className="text-sm mb-3" style={{ color: C.muted }}>
+          {hasExisting === null ? "Checking..." : hasExisting
+            ? "A PIN is already set for the /boss link — set a new one below to change it."
+            : "No PIN set yet — your boss can't get into the invoice page until you set one."}
+        </div>
+        <form onSubmit={save} className="flex flex-col gap-2">
+          <Field label="PIN (4-8 digits)">
+            <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={{ ...inputStyle(), WebkitTextSecurity: "disc" }}
+              value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} />
+          </Field>
+          <Field label="Confirm PIN">
+            <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={8} className={inputCls} style={{ ...inputStyle(), WebkitTextSecurity: "disc" }}
+              value={confirmPin} onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ""))} />
+          </Field>
+          {error && <div className="text-sm" style={{ color: C.red }}>{error}</div>}
+          {saved && <div className="text-sm" style={{ color: C.green }}>Saved — tell your boss this PIN separately from the link.</div>}
+          <Btn type="submit">Save PIN</Btn>
+        </form>
       </div>
     </div>
   );
@@ -807,6 +855,10 @@ function CollapsibleSection({ label, count, children, forceOpen }) {
 // Opens a clean, simple printable page in a new tab and triggers the
 // browser's print dialog — used for both the invoice and work order print
 // buttons below.
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function printRecords(title, items, columns) {
   const win = window.open("", "_blank");
   if (!win) { alert("Please allow pop-ups to print."); return; }
@@ -819,11 +871,11 @@ function printRecords(title, items, columns) {
     th { background: #EFEADF; }
     @media print { body { padding: 10px; } }
   `;
-  const head = columns.map((c) => `<th>${c.label}</th>`).join("");
-  const rows = items.map((item) => `<tr>${columns.map((c) => `<td>${c.value(item) ?? "—"}</td>`).join("")}</tr>`).join("");
-  win.document.write(`<html><head><title>${title}</title><style>${styles}</style></head><body>
-    <h1>${title}</h1>
-    <div class="meta">Printed ${new Date().toLocaleString()} — ${items.length} item${items.length === 1 ? "" : "s"}</div>
+  const head = columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("");
+  const rows = items.map((item) => `<tr>${columns.map((c) => `<td>${escapeHtml(c.value(item) ?? "—")}</td>`).join("")}</tr>`).join("");
+  win.document.write(`<html><head><title>${escapeHtml(title)}</title><style>${styles}</style></head><body>
+    <h1>${escapeHtml(title)}</h1>
+    <div class="meta">Printed ${escapeHtml(new Date().toLocaleString())} — ${items.length} item${items.length === 1 ? "" : "s"}</div>
     <table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
   </body></html>`);
   win.document.close();
@@ -1782,11 +1834,9 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
 
 /* ---------------- BOSS VIEW ---------------- */
 
-function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
+function BossInvoiceCard({ inv, onUpdate }) {
   const [showChat, setShowChat] = useState((inv.messages || []).length > 0);
   const [preview, setPreview] = useState(null);
-  const contractor = lookupContractor(contractors, inv.contractorId);
-  const building = lookupBuilding(buildings, inv.buildingId);
   const messages = inv.messages || [];
   const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> :
     inv.status === "declined" ? <Stamp tone="red">Declined</Stamp> : <Stamp tone="slate">Awaiting your review</Stamp>;
@@ -1798,8 +1848,8 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
       <div className="flex items-start justify-between gap-3 mb-2">
         <div>
           <div className="text-xs font-semibold mb-1" style={{ color: C.muted, fontFamily: "'IBM Plex Mono', monospace" }}>Invoice #{inv.number ?? "—"}</div>
-          <div className="text-lg font-bold" style={{ color: C.ink }}>{contractor?.name || "Unassigned vendor"}</div>
-          <div className="text-sm mt-0.5" style={{ color: C.muted }}>{building?.name || "No building"} · {fmtDate(inv.date)}</div>
+          <div className="text-lg font-bold" style={{ color: C.ink }}>{inv.contractorName || "Unassigned vendor"}</div>
+          <div className="text-sm mt-0.5" style={{ color: C.muted }}>{inv.buildingName || "No building"} · {fmtDate(inv.date)}</div>
         </div>
         {stamp}
       </div>
@@ -1851,7 +1901,7 @@ function BossInvoiceCard({ inv, contractors, buildings, onUpdate }) {
   );
 }
 
-function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalone }) {
+function BossView({ invoices, onUpdate, onExit, standalone }) {
   const pending = invoices.filter((i) => i.status === "pending");
   const reviewed = invoices.filter((i) => i.status === "approved" || i.status === "declined");
   const paid = invoices.filter((i) => i.status === "paid");
@@ -1870,17 +1920,15 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
           <div className="text-center py-6" style={{ color: C.muted }}>Nothing waiting on you right now.</div>
         )}
         {pending.map((inv) => (
-          <BossInvoiceCard key={inv.id} inv={inv} contractors={contractors} buildings={buildings}
-            onUpdate={onUpdate} />
+          <BossInvoiceCard key={inv.id} inv={inv} onUpdate={onUpdate} />
         ))}
 
         <CollapsibleSection label="Already reviewed" count={reviewed.length}>
           {reviewed.map((inv) => {
-            const contractor = lookupContractor(contractors, inv.contractorId);
             const stamp = inv.status === "approved" ? <Stamp tone="green">Approved</Stamp> : <Stamp tone="red">Declined</Stamp>;
             return (
               <div key={inv.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-                <div className="text-sm" style={{ color: C.ink }}>{contractor?.name || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
+                <div className="text-sm" style={{ color: C.ink }}>{inv.contractorName || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
                 {stamp}
               </div>
             );
@@ -1888,15 +1936,12 @@ function BossView({ invoices, contractors, buildings, onUpdate, onExit, standalo
         </CollapsibleSection>
 
         <CollapsibleSection label="Paid invoices" count={paid.length}>
-          {paid.map((inv) => {
-            const contractor = lookupContractor(contractors, inv.contractorId);
-            return (
-              <div key={inv.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-                <div className="text-sm" style={{ color: C.ink }}>{contractor?.name || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
-                <Stamp tone="green">Paid</Stamp>
-              </div>
-            );
-          })}
+          {paid.map((inv) => (
+            <div key={inv.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+              <div className="text-sm" style={{ color: C.ink }}>{inv.contractorName || "Vendor"} — ${Number(inv.amount).toLocaleString()}</div>
+              <Stamp tone="green">Paid</Stamp>
+            </div>
+          ))}
         </CollapsibleSection>
       </main>
     </div>
@@ -1912,6 +1957,7 @@ function Dashboard({ onSignOut }) {
   const [showForm, setShowForm] = useState(false);
   const [bossMode, setBossMode] = useState(false);
   const [showUnlockSetup, setShowUnlockSetup] = useState(false);
+  const [showBossPinSettings, setShowBossPinSettings] = useState(false);
   const [jumpToId, setJumpToId] = useState("");
   const [jumpToPaid, setJumpToPaid] = useState(false);
   const [jumpToDeclined, setJumpToDeclined] = useState(false);
@@ -1926,6 +1972,22 @@ function Dashboard({ onSignOut }) {
   const [buildings, buildingsPersist, bldReady] = useSynced("buildings", authReady, []);
 
   const loading = !authReady || !invReady || !vioReady || !wkReady || !conReady || !bldReady;
+
+  // One-time backfill: invoices created before vendor/building names were
+  // snapshotted onto them get filled in now, so your boss's view (which can
+  // no longer read contractors/buildings at all) shows the right name
+  // instead of "Unassigned."
+  useEffect(() => {
+    if (!invReady || !conReady || !bldReady) return;
+    invoices.forEach((inv) => {
+      if (!inv.contractorName && !inv.buildingName) {
+        const contractorName = lookupContractor(contractors, inv.contractorId)?.name || "";
+        const buildingName = lookupBuilding(buildings, inv.buildingId)?.name || "";
+        if (contractorName || buildingName) saveInvoice({ ...inv, contractorName, buildingName });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invReady, conReady, bldReady]);
 
   const addContractor = (c) => contractorsPersist([...contractors, c]);
 
@@ -1955,7 +2017,7 @@ function Dashboard({ onSignOut }) {
   }
 
   if (bossMode) {
-    return <BossView invoices={invoices} contractors={contractors} buildings={buildings} onUpdate={saveInvoice} onExit={() => setBossMode(false)} />;
+    return <BossView invoices={invoices} onUpdate={saveInvoice} onExit={() => setBossMode(false)} />;
   }
   return (
     <div className="min-h-screen" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: C.ink }}>
@@ -1976,6 +2038,9 @@ function Dashboard({ onSignOut }) {
               <button onClick={() => setShowUnlockSetup(true)} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.slate }}>
                 Quick Unlock
               </button>
+              <button onClick={() => setShowBossPinSettings(true)} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.slate }}>
+                Boss PIN
+              </button>
               <button onClick={onSignOut} className="text-xs px-2.5 py-1 rounded-md border font-medium" style={{ borderColor: C.hair, color: C.muted }}>
                 Sign out
               </button>
@@ -1985,6 +2050,7 @@ function Dashboard({ onSignOut }) {
         </div>
       </header>
       {showUnlockSetup && <QuickUnlockSetup onClose={() => setShowUnlockSetup(false)} />}
+      {showBossPinSettings && <BossPinSettings onClose={() => setShowBossPinSettings(false)} />}
 
       <nav className="px-3 sm:px-5 pt-2">
         <div className="max-w-3xl mx-auto flex gap-2 flex-wrap">
@@ -2026,7 +2092,12 @@ function Dashboard({ onSignOut }) {
               onCancel={() => setShowForm(false)}
               onSave={async (inv) => {
                 const number = await getNextInvoiceNumber();
-                await saveInvoice({ ...inv, number });
+                // Snapshot the vendor and building names directly onto the
+                // invoice — so your boss's view never has to read the
+                // contractors/buildings data at all, only invoices.
+                const contractorName = lookupContractor(contractors, inv.contractorId)?.name || "";
+                const buildingName = lookupBuilding(buildings, inv.buildingId)?.name || "";
+                await saveInvoice({ ...inv, number, contractorName, buildingName });
                 setShowForm(false);
               }} />
           )}
@@ -2183,19 +2254,97 @@ function MainApp() {
 // violations, work orders, or the directory, and there is no way to
 // navigate to the rest of the app from here.
 
+// Separate PIN from your own Quick Unlock PIN — protects the invoice page
+// specifically. You set this yourself from your dashboard (see
+// BossPinSettings below); it's stored centrally in Firestore, so it
+// applies no matter which device your boss opens the link on — not
+// per-device like your own PIN.
+async function getBossPinHash() {
+  try {
+    const snap = await getDoc(doc(db, "settings", "bossPin"));
+    return snap.exists() ? snap.data().hash : null;
+  } catch (e) {
+    console.error("Failed to read boss PIN:", e);
+    return null;
+  }
+}
+async function setBossPinHash(hash) {
+  await setDoc(doc(db, "settings", "bossPin"), { hash });
+}
+
+function BossPinUnlock({ pinHash, onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const hash = await hashPin(pin);
+    if (hash === pinHash) onUnlock();
+    else { setError("Wrong PIN."); setPin(""); }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-5" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
+      <form onSubmit={submit} className="w-full max-w-sm p-6 rounded-lg border text-center" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+        <div className="mb-3 flex justify-center"><Logo height={24} /></div>
+        <h1 className="text-lg font-bold mb-4" style={{ color: C.ink }}>Enter PIN to continue</h1>
+        <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={8} autoComplete="off" value={pin}
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+          className={inputCls} style={{ ...inputStyle(), textAlign: "center", fontSize: 22, letterSpacing: 6, WebkitTextSecurity: "disc" }} />
+        {error && <div className="text-sm mt-2" style={{ color: C.red }}>{error}</div>}
+        <div className="mt-4"><Btn type="submit">Unlock</Btn></div>
+      </form>
+    </div>
+  );
+}
+
+// Wraps BossPage: checks Firestore for the PIN you set. If you haven't set
+// one yet, the page refuses to load at all rather than letting anyone in —
+// no PIN means no access. Leaving the app re-locks it, same as your own
+// Quick Unlock.
+function BossPinGate({ children }) {
+  const [unlocked, setUnlocked] = useState(false);
+  const [pinHash, setPinHash] = useState(undefined); // undefined = loading, null = not set yet
+  useLockOnBackground(true, () => setUnlocked(false));
+
+  useEffect(() => { getBossPinHash().then(setPinHash); }, []);
+
+  if (pinHash === undefined) {
+    return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
+  }
+  if (!pinHash) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-5 text-center" style={{ backgroundColor: C.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
+        <div className="max-w-sm">
+          <div className="mb-3 flex justify-center"><Logo height={24} /></div>
+          <div className="text-sm" style={{ color: C.muted }}>This page isn't set up yet — ask your manager to set a PIN first.</div>
+        </div>
+      </div>
+    );
+  }
+  if (!unlocked) return <BossPinUnlock pinHash={pinHash} onUnlock={() => setUnlocked(true)} />;
+  return children;
+}
+
 function BossPage() {
   useFonts();
   useEffect(() => { document.title = "Abeco Management — Invoice Approvals"; }, []);
   const authReady = useAnonAuth();
+  // Deliberately reads ONLY invoices — nothing else. Vendor and building
+  // names are already snapshotted onto each invoice when it's created, so
+  // this session never needs (or is able to) read contractors, buildings,
+  // violations, or work orders.
   const [invoices, saveInvoice, , invReady] = useCollectionSynced("invoices", authReady);
-  const [contractors, , conReady] = useSynced("contractors", authReady, SEED_CONTRACTORS);
-  const [buildings, , bldReady] = useSynced("buildings", authReady, []);
-  const loading = !authReady || !invReady || !conReady || !bldReady;
+  const loading = !authReady || !invReady;
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: C.paper }}><Loader2 className="animate-spin" color={C.slate} size={28} /></div>;
   }
-  return <BossView invoices={invoices} contractors={contractors} buildings={buildings} onUpdate={saveInvoice} standalone />;
+  return (
+    <BossPinGate>
+      <BossView invoices={invoices} onUpdate={saveInvoice} standalone />
+    </BossPinGate>
+  );
 }
 
 export default function App() {
