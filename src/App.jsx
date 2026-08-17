@@ -7,6 +7,7 @@ import {
 import { doc, collection, onSnapshot, setDoc, getDoc, deleteDoc, runTransaction } from "firebase/firestore";
 import { signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { db, auth } from "./firebase";
+import * as XLSX from "xlsx";
 
 const C = {
   ink: "#1B2430",
@@ -1110,9 +1111,9 @@ function printEmergencies(items) {
   `;
   const casesHtml = items.map((item) => {
     const combined = [
-      ...(item.updates || []).map((u) => ({ text: u.text, date: u.date })),
-      ...(item.files || []).map((f) => ({ text: `[${f.kind === "image" ? "Photo" : "PDF"}: ${f.name}]`, date: f.date })),
-    ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      ...(item.updates || []).map((u) => ({ text: u.text, date: u.date, ts: u.ts })),
+      ...(item.files || []).map((f) => ({ text: `[${f.kind === "image" ? "Photo" : "PDF"}: ${f.name}]`, date: f.date, ts: f.ts })),
+    ].sort((a, b) => (b.ts || 0) - (a.ts || 0));
     const updatesHtml = combined.length
       ? combined.map((u) => `<div class="update"><span class="update-date">${escapeHtml(fmtShortDate(u.date))}</span> — ${escapeHtml(u.text)}</div>`).join("")
       : `<div class="update" style="font-style:italic;color:#8A8371;">No updates yet.</div>`;
@@ -1763,11 +1764,13 @@ function EmergencyTimeline({ updates, files, onAddText, onAddFile, onRemoveFile 
 
   // Merge text updates and files into one chronological list so photos and
   // PDFs show up right in the log where they were added, not in a separate
-  // section underneath.
+  // section underneath. Sorts by exact timestamp, not just the date, so
+  // several entries added the same day still land in the right order —
+  // entries from before this fix (no timestamp) sort to the bottom.
   const combined = [
     ...(updates || []).map((u, i) => ({ kind: "text", ...u, _key: `u${i}` })),
     ...(files || []).map((f) => ({ ...f, _key: f.id })),
-  ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  ].sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
   const handleFiles = async (fileList) => {
     setBusy(true);
@@ -1775,7 +1778,7 @@ function EmergencyTimeline({ updates, files, onAddText, onAddFile, onRemoveFile 
       try {
         const isImage = file.type.startsWith("image/");
         const dataUrl = isImage ? await resizeImage(file) : await readFileAsDataUrl(file);
-        onAddFile({ id: uid(), dataUrl, name: file.name, kind: isImage ? "image" : "file", date: todayISO() });
+        onAddFile({ id: uid(), dataUrl, name: file.name, kind: isImage ? "image" : "file", date: todayISO(), ts: Date.now() });
       } catch (e) { console.error("File upload failed:", e); }
     }
     setBusy(false);
@@ -1863,7 +1866,7 @@ function EmergencyCard({ item, onUpdate, onDelete }) {
             <Btn size="sm" tone="ghost" icon={Trash2} onClick={() => onDelete(item.id)}>Remove</Btn>
           </div>
           <EmergencyTimeline updates={updates} files={files}
-            onAddText={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO() }] })}
+            onAddText={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO(), ts: Date.now() }] })}
             onAddFile={(f) => onUpdate({ ...item, files: [...files, f] })}
             onRemoveFile={(id) => onUpdate({ ...item, files: files.filter((f) => f.id !== id) })} />
         </div>
@@ -2106,6 +2109,151 @@ function VendorsTab({ contractors, workorders, invoices, buildings }) {
   );
 }
 
+function normalizeHeader(h) {
+  return String(h || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function findColumn(headers, candidates) {
+  const normalized = headers.map(normalizeHeader);
+  for (const cand of candidates) {
+    const idx = normalized.indexOf(normalizeHeader(cand));
+    if (idx !== -1) return headers[idx];
+  }
+  return null;
+}
+
+// Reads an Excel/CSV file entirely in the browser — the file never leaves
+// your device except as part of the normal, already-protected save to
+// Firestore below. Tries a handful of common header names since real
+// spreadsheets are rarely labeled identically.
+async function parseTenantSpreadsheet(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  if (rows.length === 0) return { buildings: [], error: "No rows found in that file." };
+
+  const headers = Object.keys(rows[0]);
+  const buildingCol = findColumn(headers, ["Building", "Address", "Property", "Building Name", "Building Address"]);
+  const aptCol = findColumn(headers, ["Apartment", "Apt", "Unit", "Apt #", "Apt Number", "Unit Number"]);
+  const nameCol = findColumn(headers, ["Tenant", "Tenant Name", "Name", "Resident", "Resident Name"]);
+  const phoneCol = findColumn(headers, ["Phone", "Tenant Phone", "Phone Number", "Cell"]);
+  const emailCol = findColumn(headers, ["Email", "Tenant Email", "Email Address"]);
+
+  if (!buildingCol || !aptCol) {
+    return { buildings: [], error: `Couldn't find a Building and Apartment column. Found these headers instead: ${headers.join(", ")}` };
+  }
+
+  const buildingsMap = new Map();
+  rows.forEach((row) => {
+    const buildingName = String(row[buildingCol] || "").trim();
+    const aptNumber = String(row[aptCol] || "").trim();
+    if (!buildingName || !aptNumber) return;
+    if (!buildingsMap.has(buildingName)) buildingsMap.set(buildingName, []);
+    buildingsMap.get(buildingName).push({
+      id: uid(),
+      number: aptNumber,
+      tenantName: nameCol ? String(row[nameCol] || "").trim() : "",
+      tenantPhone: phoneCol ? String(row[phoneCol] || "").trim() : "",
+      tenantEmail: emailCol ? String(row[emailCol] || "").trim() : "",
+    });
+  });
+
+  const buildings = Array.from(buildingsMap.entries()).map(([name, apartments]) => ({ id: uid(), name, apartments }));
+  return { buildings, error: null };
+}
+
+// Adds new buildings/apartments and updates tenant info on ones that
+// already exist by matching name — never deletes anything already there.
+function mergeImportedBuildings(existing, imported) {
+  const result = existing.map((b) => ({ ...b, apartments: [...b.apartments] }));
+  imported.forEach((impB) => {
+    let target = result.find((b) => b.name.trim().toLowerCase() === impB.name.trim().toLowerCase());
+    if (!target) { result.push(impB); return; }
+    impB.apartments.forEach((impApt) => {
+      const idx = target.apartments.findIndex((a) => a.number.trim().toLowerCase() === impApt.number.trim().toLowerCase());
+      if (idx === -1) {
+        target.apartments.push(impApt);
+      } else {
+        target.apartments[idx] = {
+          ...target.apartments[idx],
+          tenantName: impApt.tenantName || target.apartments[idx].tenantName,
+          tenantPhone: impApt.tenantPhone || target.apartments[idx].tenantPhone,
+          tenantEmail: impApt.tenantEmail || target.apartments[idx].tenantEmail,
+        };
+      }
+    });
+  });
+  return result;
+}
+
+function SpreadsheetImport({ buildings, buildingsPersist, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [preview, setPreview] = useState(null);
+  const inputRef = useRef(null);
+
+  const handleFile = async (file) => {
+    setBusy(true); setError(""); setPreview(null);
+    try {
+      const result = await parseTenantSpreadsheet(file);
+      if (result.error) { setError(result.error); }
+      else {
+        const totalApts = result.buildings.reduce((sum, b) => sum + b.apartments.length, 0);
+        setPreview({ buildings: result.buildings, totalApts });
+      }
+    } catch (e) {
+      console.error(e);
+      setError("Couldn't read that file — make sure it's a valid Excel (.xlsx) or CSV file.");
+    }
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const confirmImport = () => {
+    if (!preview) return;
+    buildingsPersist(mergeImportedBuildings(buildings, preview.buildings));
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-5" style={{ backgroundColor: "rgba(0,0,0,0.5)" }}>
+      <div className="w-full max-w-md p-5 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-bold" style={{ color: C.ink }}>Import from spreadsheet</h2>
+          <button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button>
+        </div>
+
+        {!preview && (
+          <>
+            <div className="text-sm mb-3" style={{ color: C.muted }}>
+              Upload an Excel (.xlsx) or CSV file with columns for Building, Apartment, Tenant Name, Phone, and Email.
+              Column names don't need to match exactly — it tries common variations.
+            </div>
+            <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
+              onChange={(e) => e.target.files[0] && handleFile(e.target.files[0])} />
+            <Btn onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? "Reading..." : "Choose file"}</Btn>
+            {error && <div className="text-sm mt-2" style={{ color: C.red }}>{error}</div>}
+          </>
+        )}
+
+        {preview && (
+          <>
+            <div className="text-sm mb-3" style={{ color: C.ink }}>
+              Found <strong>{preview.buildings.length}</strong> building{preview.buildings.length === 1 ? "" : "s"} and{" "}
+              <strong>{preview.totalApts}</strong> apartment{preview.totalApts === 1 ? "" : "s"}. This adds new ones and updates
+              tenant info on any matching building/apartment already in your Directory — nothing gets deleted.
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Btn tone="ghost" onClick={() => setPreview(null)}>Back</Btn>
+              <Btn onClick={confirmImport}>Import</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPersist }) {
   const [view, setView] = useState("buildings");
   const [newBuilding, setNewBuilding] = useState("");
@@ -2115,6 +2263,7 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
   const [addressMatches, setAddressMatches] = useState([]);
   const [addressBusy, setAddressBusy] = useState(false);
   const [staged, setStaged] = useState({ zip: "", units: null });
+  const [showImport, setShowImport] = useState(false);
 
   // Looks up what you're typing against NYC public property records after a
   // short pause, so it doesn't fire on every keystroke.
@@ -2148,7 +2297,9 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
       <div className="flex gap-2">
         <Btn tone={view === "buildings" ? "slate" : "ghost"} icon={Building2} onClick={() => setView("buildings")}>Buildings</Btn>
         <Btn tone={view === "contractors" ? "slate" : "ghost"} icon={Users} onClick={() => setView("contractors")}>Contractors</Btn>
+        {view === "buildings" && <Btn tone="ghost" onClick={() => setShowImport(true)}>Import from spreadsheet</Btn>}
       </div>
+      {showImport && <SpreadsheetImport buildings={buildings} buildingsPersist={buildingsPersist} onClose={() => setShowImport(false)} />}
 
       {view === "buildings" && (
         <>
