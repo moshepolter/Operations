@@ -1113,7 +1113,7 @@ function printEmergencies(items) {
     const combined = [
       ...(item.updates || []).map((u) => ({ text: u.text, date: u.date, ts: u.ts })),
       ...(item.files || []).map((f) => ({ text: `[${f.kind === "image" ? "Photo" : "PDF"}: ${f.name}]`, date: f.date, ts: f.ts })),
-    ].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    ].sort((a, b) => (a.ts || 0) - (b.ts || 0));
     const updatesHtml = combined.length
       ? combined.map((u) => `<div class="update"><span class="update-date">${escapeHtml(fmtShortDate(u.date))}</span> — ${escapeHtml(u.text)}</div>`).join("")
       : `<div class="update" style="font-style:italic;color:#8A8371;">No updates yet.</div>`;
@@ -1680,18 +1680,23 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
 
   return (
     <div className="rounded border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
-      <div className="pl-2 pr-1.5 py-0.5 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(!open)}>
-        <div className="min-w-0 flex-1 flex items-center gap-1.5 flex-wrap">
-          <span className="text-[10px] font-semibold px-1 rounded shrink-0" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
-          <span className="font-semibold text-xs truncate" style={{ color: C.ink }}>{building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""}</span>
-          <span className="text-xs truncate" style={{ color: C.muted }}>
-            {apartment?.tenantName || "No tenant"} · {w.issue} · {tasks.length > 0
+      <div className="pl-2 pr-1.5 py-1 flex items-center justify-between gap-2 cursor-pointer" onClick={() => setOpen(!open)}>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold px-1 rounded shrink-0" style={{ backgroundColor: C.paperDark, color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>#{w.number ?? "—"}</span>
+            <span className="font-semibold text-xs truncate" style={{ color: C.ink }}>
+              {building?.name || "No building"}{apartment ? ` · Apt ${apartment.number}` : ""}
+              <span className="font-normal" style={{ color: C.muted }}> · {apartment?.tenantName || "No tenant"}</span>
+            </span>
+            {stamp}
+            {w.notBilling && <Stamp tone="slate">Not billing</Stamp>}
+            {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
+          </div>
+          <div className="text-xs mt-0.5 truncate" style={{ color: C.muted }}>
+            {w.issue} · {tasks.length > 0
               ? `${tasks.filter((t) => t.contractorId).length}/${tasks.length} vendors`
               : (contractor ? contractor.name : "Unassigned")} · {days}d{w.status === "resolved" ? " (resolved)" : ""}
-          </span>
-          {stamp}
-          {w.notBilling && <Stamp tone="slate">Not billing</Stamp>}
-          {tasks.length > 0 && <Stamp tone="slate">{tasks.filter((t) => t.status === "completed").length}/{tasks.length} tasks</Stamp>}
+          </div>
         </div>
         {open ? <ChevronUp size={13} className="shrink-0" color={C.muted} /> : <ChevronDown size={13} className="shrink-0" color={C.muted} />}
       </div>
@@ -1767,10 +1772,11 @@ function EmergencyTimeline({ updates, files, onAddText, onAddFile, onRemoveFile 
   // section underneath. Sorts by exact timestamp, not just the date, so
   // several entries added the same day still land in the right order —
   // entries from before this fix (no timestamp) sort to the bottom.
+  // Oldest first, newest last — reads top-to-bottom like a log.
   const combined = [
     ...(updates || []).map((u, i) => ({ kind: "text", ...u, _key: `u${i}` })),
     ...(files || []).map((f) => ({ ...f, _key: f.id })),
-  ].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  ].sort((a, b) => (a.ts || 0) - (b.ts || 0));
 
   const handleFiles = async (fileList) => {
     setBusy(true);
@@ -1838,6 +1844,8 @@ function EmergencyTimeline({ updates, files, onAddText, onAddFile, onRemoveFile 
 
 function EmergencyCard({ item, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleVal, setTitleVal] = useState(item.title);
   const updates = item.updates || [];
   const files = item.files || [];
   const lastEntryDate = [...updates, ...files].map((e) => e.date).sort().slice(-1)[0] || item.createdDate;
@@ -1859,6 +1867,18 @@ function EmergencyCard({ item, onUpdate, onDelete }) {
       {open && (
         <div className="px-3 pb-3">
           <div className="text-xs mb-2" style={{ color: C.muted }}>Opened {fmtDate(item.createdDate)}</div>
+          {editingTitle ? (
+            <div className="flex items-center gap-2 mb-2" onClick={(e) => e.stopPropagation()}>
+              <input className={inputCls} style={inputStyle()} value={titleVal} onChange={(e) => setTitleVal(e.target.value)} autoFocus />
+              <Btn size="sm" onClick={() => { if (titleVal.trim()) { onUpdate({ ...item, title: titleVal.trim() }); setEditingTitle(false); } }}>Save</Btn>
+              <Btn size="sm" tone="ghost" onClick={() => { setTitleVal(item.title); setEditingTitle(false); }}>Cancel</Btn>
+            </div>
+          ) : (
+            <button onClick={(e) => { e.stopPropagation(); setEditingTitle(true); }} className="flex items-center gap-1.5 mb-2 hover:opacity-75">
+              <Pencil size={12} color={C.muted} />
+              <span className="text-xs" style={{ color: C.muted }}>Edit title</span>
+            </button>
+          )}
           <div className="flex flex-wrap gap-2 mb-1">
             {item.status !== "resolved"
               ? <Btn size="sm" tone="green" icon={CheckCircle2} onClick={() => onUpdate({ ...item, status: "resolved" })}>Mark resolved</Btn>
@@ -2377,15 +2397,21 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
             )}
           </div>
           {buildings.length > 1 && (
-            <SearchBar value={buildingSearch} onChange={setBuildingSearch} placeholder="Jump to a building — search by name or address..." />
+            <SearchBar value={buildingSearch} onChange={setBuildingSearch} placeholder="Search by building, tenant name, phone, or apartment number..." />
           )}
           {buildings.length === 0 && <Empty text="No buildings yet. Start typing an address above, fill in its units, then collapse it." />}
           {(() => {
             const q = buildingSearch.trim().toLowerCase();
-            const filtered = q ? buildings.filter((b) => (b.name || "").toLowerCase().includes(q)) : buildings;
+            const buildingMatches = (b) => {
+              if ((b.name || "").toLowerCase().includes(q)) return true;
+              return (b.apartments || []).some((a) =>
+                [a.number, a.tenantName, a.tenantPhone, a.tenantEmail].some((v) => (v || "").toLowerCase().includes(q))
+              );
+            };
+            const filtered = q ? buildings.filter(buildingMatches) : buildings;
             if (buildings.length > 0 && filtered.length === 0) return <Empty text="No buildings match your search." />;
             return sortBuildings(filtered).map((b) => (
-              <BuildingCard key={b.id} b={b} defaultOpen={b.id === justAddedId}
+              <BuildingCard key={b.id} b={b} defaultOpen={b.id === justAddedId || (!!q && buildings.length !== filtered.length)}
                 onUpdate={(next) => buildingsPersist(buildings.map((x) => (x.id === next.id ? next : x)))}
                 onDelete={(id) => buildingsPersist(buildings.filter((x) => x.id !== id))} />
             ));
