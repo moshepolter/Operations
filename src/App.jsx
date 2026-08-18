@@ -1135,11 +1135,12 @@ function printEmergencies(items) {
 
 function EmergencyPrintButton({ openItems, closedItems }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const byNumber = (a, b) => (a.number ?? 0) - (b.number ?? 0);
   const go = (which) => {
     setMenuOpen(false);
-    if (which === "open") printEmergencies(openItems);
-    else if (which === "closed") printEmergencies(closedItems);
-    else printEmergencies([...openItems, ...closedItems]);
+    if (which === "open") printEmergencies([...openItems].sort(byNumber));
+    else if (which === "closed") printEmergencies([...closedItems].sort(byNumber));
+    else printEmergencies([...openItems, ...closedItems].sort(byNumber));
   };
   return (
     <div className="relative inline-block">
@@ -1863,7 +1864,7 @@ function EmergencyForm({ onSave, onCancel }) {
   );
 }
 
-function EmergencyTimeline({ updates, files, onAddText, onEditText, onAddFile, onRemoveFile }) {
+function EmergencyTimeline({ updates, files, onAddText, onEditText, onDeleteText, onAddFile, onRemoveFile }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
@@ -1921,6 +1922,9 @@ function EmergencyTimeline({ updates, files, onAddText, onEditText, onAddFile, o
                 </div>
                 <button onClick={() => { setEditingKey(entry._key); setEditVal(entry.text); }} className="shrink-0 mt-0.5" style={{ color: C.muted }}>
                   <Pencil size={11} />
+                </button>
+                <button onClick={() => { if (window.confirm("Delete this update?")) onDeleteText(entry._key); }} className="shrink-0 mt-0.5" style={{ color: C.red }}>
+                  <Trash2 size={11} />
                 </button>
               </div>
             );
@@ -2010,6 +2014,10 @@ function EmergencyCard({ item, onUpdate, onDelete }) {
             onEditText={(key, newText) => {
               const idx = parseInt(key.slice(1), 10);
               onUpdate({ ...item, updates: updates.map((u, i) => (i === idx ? { ...u, text: newText } : u)) });
+            }}
+            onDeleteText={(key) => {
+              const idx = parseInt(key.slice(1), 10);
+              onUpdate({ ...item, updates: updates.filter((u, i) => i !== idx) });
             }}
             onAddFile={(f) => onUpdate({ ...item, files: [...files, f] })}
             onRemoveFile={(id) => onUpdate({ ...item, files: files.filter((f) => f.id !== id) })} />
@@ -2956,11 +2964,6 @@ function Dashboard({ onSignOut }) {
               <SearchBar value={emergencySearch} onChange={setEmergencySearch} placeholder="Search by title, building, or anything in the updates..." />
               <div className="flex gap-2">
                 <EmergencyPrintButton openItems={activeEmergencies} closedItems={resolvedEmergencies} />
-                <Btn size="sm" tone="ghost" icon={Trash2} onClick={async () => {
-                  if (!window.confirm(`Delete all ${emergencies.length} 911(s) and reset numbering back to #1? This is meant for clearing out test data — it can't be undone.`)) return;
-                  for (const item of emergencies) await deleteEmergency(item.id);
-                  await resetEmergencyNumbering();
-                }}>Reset 911s (testing)</Btn>
               </div>
             </>
           )}
