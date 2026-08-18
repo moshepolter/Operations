@@ -2121,17 +2121,49 @@ function findColumn(headers, candidates) {
   return null;
 }
 
-// Reads an Excel/CSV file entirely in the browser — the file never leaves
-// your device except as part of the normal, already-protected save to
-// Firestore below. Tries a handful of common header names since real
-// spreadsheets are rarely labeled identically.
-async function parseTenantSpreadsheet(file) {
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array" });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-  if (rows.length === 0) return { buildings: [], error: "No rows found in that file." };
+// Strategy A: a "building header" row (a short code + building name, every
+// other column blank), followed by indented tenant rows underneath it —
+// the format property-management software (e.g. Rent Manager's "Tenant
+// Summary" report) typically exports. Columns are fixed by position:
+// 0 Tenant Code, 1 Tenant Name, 2 Unit, 3-12 various phone fields,
+// 13 E-Mail. Building header rows have a code with no dash; tenant rows
+// have a code containing a dash (e.g. "1-2a").
+function parseHierarchicalRows(raw) {
+  const buildings = [];
+  let current = null;
+  const phonePriority = [7, 4, 5, 6, 3, 8, 9, 10, 11, 12];
 
+  raw.forEach((row) => {
+    const col0 = String(row[0] || "").trim();
+    const col1 = String(row[1] || "").trim();
+    const unit = String(row[2] || "").trim();
+    if (!col0 && !col1) return;
+    const phone = phonePriority.map((i) => String(row[i] || "").trim()).find(Boolean) || "";
+    const email = String(row[13] || "").trim();
+    const restEmpty = !unit && !phone && !email;
+
+    if (col0 && col1 && restEmpty && !col0.includes("-")) {
+      current = { id: uid(), name: col1, apartments: [] };
+      buildings.push(current);
+    } else if (col0.includes("-") && current) {
+      const emails = email.split(";").map((e) => e.trim()).filter(Boolean).join("; ");
+      current.apartments.push({
+        id: uid(),
+        number: unit || col0.split("-").slice(1).join("-").toUpperCase(),
+        tenantName: col1,
+        tenantPhone: phone,
+        tenantEmail: emails,
+      });
+    }
+  });
+
+  return { buildings, error: buildings.length === 0 ? null : undefined };
+}
+
+// Strategy B: a plain flat table with one column each for Building,
+// Apartment, Tenant, Phone, Email — used if Strategy A finds nothing.
+function parseFlatTable(rows) {
+  if (rows.length === 0) return { buildings: [], error: "No rows found in that file." };
   const headers = Object.keys(rows[0]);
   const buildingCol = findColumn(headers, ["Building", "Address", "Property", "Building Name", "Building Address"]);
   const aptCol = findColumn(headers, ["Apartment", "Apt", "Unit", "Apt #", "Apt Number", "Unit Number"]);
@@ -2160,6 +2192,24 @@ async function parseTenantSpreadsheet(file) {
 
   const buildings = Array.from(buildingsMap.entries()).map(([name, apartments]) => ({ id: uid(), name, apartments }));
   return { buildings, error: null };
+}
+
+// Reads an Excel/CSV file entirely in the browser — the file never leaves
+// your device except as part of the normal, already-protected save to
+// Firestore below. Tries the hierarchical building-header format first
+// (common in property-management software exports); if that finds
+// nothing, falls back to a plain flat table with named columns.
+async function parseTenantSpreadsheet(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+
+  const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  const hierarchical = parseHierarchicalRows(raw);
+  if (hierarchical.buildings.length > 0) return { buildings: hierarchical.buildings, error: null };
+
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  return parseFlatTable(rows);
 }
 
 // Adds new buildings/apartments and updates tenant info on ones that
@@ -2767,11 +2817,11 @@ function Dashboard({ onSignOut }) {
 
           {tab === "emergencies" && (activeEmergencies.length === 0 && resolvedEmergencies.length === 0 ? <Empty text={emergencies.length === 0 ? "No 911s right now." : "No 911s match your search."} /> :
             <>
-              {[...activeEmergencies].sort((a, b) => (b.number ?? 0) - (a.number ?? 0)).map((item) => (
+              {[...activeEmergencies].sort((a, b) => (a.number ?? 0) - (b.number ?? 0)).map((item) => (
                 <EmergencyCard key={item.id} item={item} onUpdate={saveEmergency} onDelete={deleteEmergency} />
               ))}
               <CollapsibleSection label="Resolved 911s" count={resolvedEmergencies.length}>
-                {[...resolvedEmergencies].sort((a, b) => (b.number ?? 0) - (a.number ?? 0)).map((item) => (
+                {[...resolvedEmergencies].sort((a, b) => (a.number ?? 0) - (b.number ?? 0)).map((item) => (
                   <EmergencyCard key={item.id} item={item} onUpdate={saveEmergency} onDelete={deleteEmergency} />
                 ))}
               </CollapsibleSection>
