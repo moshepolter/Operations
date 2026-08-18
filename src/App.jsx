@@ -1670,6 +1670,8 @@ function TaskManager({ tasks, contractors, buildingName, aptNumber, tenant, issu
 
 function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate, onDelete }) {
   const [open, setOpen] = useState(false);
+  const [editingCore, setEditingCore] = useState(false);
+  const [editVal, setEditVal] = useState(null);
   const building = lookupBuilding(buildings, w.buildingId);
   const apartment = lookupApartment(buildings, w.buildingId, w.apartmentId);
   const contractor = lookupContractor(contractors, w.contractorId);
@@ -1677,6 +1679,9 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
   const tasks = w.tasks || [];
   const stamp = w.status === "resolved" ? <Stamp tone="green">Resolved</Stamp> :
     w.status === "in-progress" ? <Stamp tone="amber">In progress</Stamp> : <Stamp tone="slate">Open</Stamp>;
+
+  const startEdit = () => { setEditVal({ buildingId: w.buildingId, apartmentId: w.apartmentId, issue: w.issue, dateOpened: w.dateOpened }); setEditingCore(true); };
+  const saveEdit = () => { onUpdate({ ...w, ...editVal }); setEditingCore(false); };
 
   return (
     <div className="rounded border overflow-hidden" style={{ borderColor: C.hair, backgroundColor: C.card }}>
@@ -1702,8 +1707,27 @@ function WorkOrderCard({ w, contractors, buildings, onCreateContractor, onUpdate
       </div>
       {open && (
         <div className="px-3 pb-3">
+          {editingCore ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3 p-2.5 rounded" style={{ backgroundColor: C.paperDark }} onClick={(e) => e.stopPropagation()}>
+              <BuildingApartmentPicker buildings={buildings} buildingId={editVal.buildingId} apartmentId={editVal.apartmentId}
+                onChangeBuilding={(id) => setEditVal((p) => ({ ...p, buildingId: id, apartmentId: "" }))}
+                onChangeApartment={(id) => setEditVal((p) => ({ ...p, apartmentId: id }))} />
+              <Field label="Date opened"><input type="date" className={inputCls} style={inputStyle()} value={editVal.dateOpened}
+                onChange={(e) => setEditVal((p) => ({ ...p, dateOpened: e.target.value }))} /></Field>
+              <div className="sm:col-span-2">
+                <Field label="Issue"><textarea className={inputCls} style={inputStyle()} rows={2} value={editVal.issue}
+                  onChange={(e) => setEditVal((p) => ({ ...p, issue: e.target.value }))} /></Field>
+              </div>
+              <div className="sm:col-span-2 flex gap-2 justify-end">
+                <Btn size="sm" tone="ghost" onClick={() => setEditingCore(false)}>Cancel</Btn>
+                <Btn size="sm" onClick={saveEdit}>Save</Btn>
+              </div>
+            </div>
+          ) : (
+            <Btn size="sm" tone="ghost" icon={Pencil} onClick={(e) => { e.stopPropagation(); startEdit(); }}>Edit</Btn>
+          )}
           {apartment && (
-            <div className="text-sm mb-3 p-2.5 rounded flex items-start gap-2" style={{ backgroundColor: C.paperDark }}>
+            <div className="text-sm my-3 p-2.5 rounded flex items-start gap-2" style={{ backgroundColor: C.paperDark }}>
               <User size={14} className="mt-0.5" color={C.slate} />
               <div>
                 <div className="font-medium" style={{ color: C.ink }}>{apartment.tenantName || "—"}</div>
@@ -1760,11 +1784,13 @@ function EmergencyForm({ onSave, onCancel }) {
   );
 }
 
-function EmergencyTimeline({ updates, files, onAddText, onAddFile, onRemoveFile }) {
+function EmergencyTimeline({ updates, files, onAddText, onEditText, onAddFile, onRemoveFile }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
   const [pdfPreview, setPdfPreview] = useState(null);
+  const [editingKey, setEditingKey] = useState(null);
+  const [editVal, setEditVal] = useState("");
   const inputRef = useRef(null);
 
   // Merge text updates and files into one chronological list so photos and
@@ -1798,10 +1824,25 @@ function EmergencyTimeline({ updates, files, onAddText, onAddFile, onRemoveFile 
         {combined.length === 0 && <div className="text-sm italic" style={{ color: C.muted }}>Nothing yet.</div>}
         {combined.map((entry) => {
           if (entry.kind === "text") {
+            if (editingKey === entry._key) {
+              return (
+                <div key={entry._key} className="flex items-center gap-2">
+                  <input className={inputCls} style={inputStyle()} value={editVal} onChange={(e) => setEditVal(e.target.value)} autoFocus
+                    onKeyDown={(e) => { if (e.key === "Enter" && editVal.trim()) { onEditText(entry._key, editVal.trim()); setEditingKey(null); } }} />
+                  <Btn size="sm" onClick={() => { if (editVal.trim()) { onEditText(entry._key, editVal.trim()); setEditingKey(null); } }}>Save</Btn>
+                  <Btn size="sm" tone="ghost" onClick={() => setEditingKey(null)}>Cancel</Btn>
+                </div>
+              );
+            }
             return (
-              <div key={entry._key} className="text-sm leading-relaxed" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>
-                <span className="font-bold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtShortDate(entry.date)}</span>
-                <span style={{ color: C.ink }}> — {entry.text}</span>
+              <div key={entry._key} className="flex items-start gap-1.5">
+                <div className="text-sm leading-relaxed flex-1" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>
+                  <span className="font-bold" style={{ color: C.slate, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtShortDate(entry.date)}</span>
+                  <span style={{ color: C.ink }}> — {entry.text}</span>
+                </div>
+                <button onClick={() => { setEditingKey(entry._key); setEditVal(entry.text); }} className="shrink-0 mt-0.5" style={{ color: C.muted }}>
+                  <Pencil size={11} />
+                </button>
               </div>
             );
           }
@@ -1887,6 +1928,10 @@ function EmergencyCard({ item, onUpdate, onDelete }) {
           </div>
           <EmergencyTimeline updates={updates} files={files}
             onAddText={(text) => onUpdate({ ...item, updates: [...updates, { text, date: todayISO(), ts: Date.now() }] })}
+            onEditText={(key, newText) => {
+              const idx = parseInt(key.slice(1), 10);
+              onUpdate({ ...item, updates: updates.map((u, i) => (i === idx ? { ...u, text: newText } : u)) });
+            }}
             onAddFile={(f) => onUpdate({ ...item, files: [...files, f] })}
             onRemoveFile={(id) => onUpdate({ ...item, files: files.filter((f) => f.id !== id) })} />
         </div>
@@ -2333,7 +2378,6 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
   const [addressMatches, setAddressMatches] = useState([]);
   const [addressBusy, setAddressBusy] = useState(false);
   const [staged, setStaged] = useState({ zip: "", units: null });
-  const [showImport, setShowImport] = useState(false);
 
   // Looks up what you're typing against NYC public property records after a
   // short pause, so it doesn't fire on every keystroke.
@@ -2367,9 +2411,7 @@ function DirectoryTab({ buildings, contractors, buildingsPersist, contractorsPer
       <div className="flex gap-2">
         <Btn tone={view === "buildings" ? "slate" : "ghost"} icon={Building2} onClick={() => setView("buildings")}>Buildings</Btn>
         <Btn tone={view === "contractors" ? "slate" : "ghost"} icon={Users} onClick={() => setView("contractors")}>Contractors</Btn>
-        {view === "buildings" && <Btn tone="ghost" onClick={() => setShowImport(true)}>Import from spreadsheet</Btn>}
       </div>
-      {showImport && <SpreadsheetImport buildings={buildings} buildingsPersist={buildingsPersist} onClose={() => setShowImport(false)} />}
 
       {view === "buildings" && (
         <>
