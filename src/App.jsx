@@ -1156,6 +1156,85 @@ function EmergencyPrintButton({ openItems, closedItems }) {
   );
 }
 
+// Imports 911s from a prepared JSON file — a plain array of objects with
+// title/status/createdDate/updates/files. Each one gets a fresh sequential
+// number assigned on the way in. Adds new 911s only — never touches or
+// removes anything already in the list.
+function EmergencyImport({ onClose, saveEmergency }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [parsedData, setParsedData] = useState(null);
+  const inputRef = useRef(null);
+
+  const handleFile = async (file) => {
+    setBusy(true); setError(""); setPreview(null); setParsedData(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) {
+        setError("That file isn't in the expected format — it should be a JSON array.");
+      } else {
+        const totalUpdates = parsed.reduce((sum, e) => sum + (e.updates?.length || 0), 0);
+        setParsedData(parsed);
+        setPreview({ count: parsed.length, totalUpdates });
+      }
+    } catch (e) {
+      console.error(e);
+      setError("Couldn't read that file — make sure it's the .json import file.");
+    }
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const confirmImport = async () => {
+    if (!parsedData) return;
+    setBusy(true);
+    for (const item of parsedData) {
+      const number = await getNextEmergencyNumber();
+      await saveEmergency({ ...item, number });
+    }
+    setBusy(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-5" style={{ backgroundColor: "rgba(0,0,0,0.5)" }}>
+      <div className="w-full max-w-md p-5 rounded-lg border" style={{ borderColor: C.hair, backgroundColor: C.card }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-bold" style={{ color: C.ink }}>Import 911s from file</h2>
+          <button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button>
+        </div>
+
+        {!preview && (
+          <>
+            <div className="text-sm mb-3" style={{ color: C.muted }}>
+              Upload the prepared .json import file. Each 911 gets a fresh number assigned automatically.
+            </div>
+            <input ref={inputRef} type="file" accept=".json,application/json" className="hidden"
+              onChange={(e) => e.target.files[0] && handleFile(e.target.files[0])} />
+            <Btn onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? "Reading..." : "Choose file"}</Btn>
+            {error && <div className="text-sm mt-2" style={{ color: C.red }}>{error}</div>}
+          </>
+        )}
+
+        {preview && (
+          <>
+            <div className="text-sm mb-3" style={{ color: C.ink }}>
+              Found <strong>{preview.count}</strong> 911{preview.count === 1 ? "" : "s"} with <strong>{preview.totalUpdates}</strong> update{preview.totalUpdates === 1 ? "" : "s"} total.
+              This adds them as new 911s — it won't touch or remove anything already in your list.
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Btn tone="ghost" onClick={() => setPreview(null)} disabled={busy}>Back</Btn>
+              <Btn onClick={confirmImport} disabled={busy}>{busy ? "Importing..." : "Import"}</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function InvoicePrintButton({ activeItems, paidItems, declinedItems, columns }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const go = (which) => {
@@ -2613,6 +2692,7 @@ function Dashboard({ onSignOut }) {
   const [invoiceSearch, setInvoiceSearch] = useState("");
   const [workOrderSearch, setWorkOrderSearch] = useState("");
   const [emergencySearch, setEmergencySearch] = useState("");
+  const [showEmergencyImport, setShowEmergencyImport] = useState(false);
   const invoiceCardRefs = useRef({});
 
   const [invoices, saveInvoice, deleteInvoice, invReady] = useCollectionSynced("invoices", authReady);
@@ -2739,12 +2819,14 @@ function Dashboard({ onSignOut }) {
           )}
 
           {(tab === "invoices" || tab === "violations" || tab === "workorders" || tab === "emergencies") && (
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
+              {tab === "emergencies" && <Btn tone="ghost" onClick={() => setShowEmergencyImport(true)}>Import from file</Btn>}
               <Btn icon={showForm ? X : Plus} onClick={() => setShowForm(!showForm)}>
                 {showForm ? "Close" : tab === "invoices" ? "New invoice" : tab === "violations" ? "New violation" : tab === "emergencies" ? "New 911" : "New work order"}
               </Btn>
             </div>
           )}
+          {showEmergencyImport && <EmergencyImport onClose={() => setShowEmergencyImport(false)} saveEmergency={saveEmergency} />}
 
           {showForm && tab === "invoices" && (
             <InvoiceForm contractors={contractors} buildings={buildings} workorders={workorders} violations={violations} invoices={invoices} onCreateContractor={addContractor}
